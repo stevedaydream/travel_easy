@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 和紙底 -->
+  <rect width="512" height="512" rx="112" fill="#F6F0E2"/>
+  <!-- 圓相 enso 墨圈 -->
+  <path d="M 256 58 A 198 198 0 1 0 398 116" fill="none" stroke="#3D362E" stroke-width="26" stroke-linecap="round" opacity="0.82"/>
+  <!-- 柴犬耳朵 -->
+  <path d="M 148 168 L 122 84 L 208 122 Z" fill="#DFA059"/>
+  <path d="M 364 168 L 390 84 L 304 122 Z" fill="#DFA059"/>
+  <path d="M 152 152 L 138 106 L 190 128 Z" fill="#FBF4E6"/>
+  <path d="M 360 152 L 374 106 L 322 128 Z" fill="#FBF4E6"/>
+  <!-- 柴犬臉 -->
+  <ellipse cx="256" cy="266" rx="150" ry="140" fill="#DFA059"/>
+  <!-- 白色眉斑與口吻 -->
+  <ellipse cx="196" cy="222" rx="34" ry="26" fill="#FBF4E6"/>
+  <ellipse cx="316" cy="222" rx="34" ry="26" fill="#FBF4E6"/>
+  <ellipse cx="256" cy="316" rx="86" ry="66" fill="#FBF4E6"/>
+  <!-- 眼睛 -->
+  <circle cx="196" cy="234" r="13" fill="#33302B"/>
+  <circle cx="316" cy="234" r="13" fill="#33302B"/>
+  <circle cx="200" cy="230" r="4" fill="#FFFFFF"/>
+  <circle cx="320" cy="230" r="4" fill="#FFFFFF"/>
+  <!-- 鼻與嘴 -->
+  <ellipse cx="256" cy="292" rx="16" ry="12" fill="#33302B"/>
+  <path d="M 256 304 Q 256 326 236 330 M 256 304 Q 256 326 276 330" fill="none" stroke="#33302B" stroke-width="9" stroke-linecap="round"/>
+  <!-- 腮紅 -->
+  <circle cx="158" cy="292" r="20" fill="#EDA79B" opacity="0.7"/>
+  <circle cx="354" cy="292" r="20" fill="#EDA79B" opacity="0.7"/>
+  <!-- 朱印落款 -->
+  <rect x="396" y="396" width="72" height="72" rx="14" fill="#C75A51"/>
+  <text x="432" y="448" font-size="48" text-anchor="middle" fill="#FBF4E6" font-family="serif" font-weight="bold">柴</text>
+</svg>

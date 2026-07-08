@@ -192,6 +192,24 @@ const SPOT_TAGS = [
   { type: "custom", name: "✨ 個人自訂" }
 ];
 
+// --- 吉祥物：摺紙柴犬 (使用者提供的紙藝柴犬圖，已去背) ---
+const ShibaInk = ({ className = "" }) => (
+  <img
+    src="/mascot/shiba-origami.png"
+    alt="小柴導遊"
+    draggable={false}
+    className={`object-contain select-none ${className}`}
+  />
+);
+
+// --- 交通方式清單 (偏好與景點間移動共用) ---
+const TRANSPORT_MODES = [
+  { key: "transit", label: "🚃 大眾運輸", mapsMode: "transit", defaultMin: 25 },
+  { key: "walking", label: "🚶 步行", mapsMode: "walking", defaultMin: 15 },
+  { key: "driving", label: "🚗 自駕 / 計程車", mapsMode: "driving", defaultMin: 15 },
+  { key: "bicycling", label: "🚲 單車", mapsMode: "bicycling", defaultMin: 20 }
+];
+
 export default function App() {
   const [view, setView] = useState('welcome'); // 'welcome' | 'planner'
   const [itinerary, setItinerary] = useState(() => {
@@ -251,7 +269,53 @@ export default function App() {
   // 通知吐司訊息 (Toast)
   const [toast, setToast] = useState(null);
 
+  // 開場柴犬 Logo 動畫
+  const [showIntro, setShowIntro] = useState(true);
+  const [introFading, setIntroFading] = useState(false);
+
+  const dismissIntro = () => {
+    if (introFading) return;
+    setIntroFading(true);
+    setTimeout(() => setShowIntro(false), 700);
+  };
+
+  // 安全網：影片無法播放時最多 10 秒自動關閉
+  useEffect(() => {
+    if (!showIntro) return;
+    const failsafe = setTimeout(dismissIntro, 10000);
+    return () => clearTimeout(failsafe);
+  }, [showIntro]);
+
+  // 懸浮回頂按鈕顯示狀態
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setShowBackToTop(window.scrollY > 400);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   const chatHistoryRef = useRef(null);
+  const dayTimelineRef = useRef(null);
+  const flightPanelRef = useRef(null);
+  const lodgingPanelRef = useRef(null);
+
+  // 總覽列點擊：切換天數並捲動至該天行程區塊
+  const jumpToDay = (dayNum) => {
+    setActiveDay(dayNum);
+    setTimeout(() => {
+      if (dayTimelineRef.current) {
+        dayTimelineRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 60);
+  };
+
+  // 流程追蹤卡片點擊：捲動至對應設定區塊
+  const jumpToRef = (ref) => {
+    if (ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   // --- 機票提醒相關狀態與 LocalStorage 綁定 ---
   const [departureTime, setDepartureTime] = useState(() => {
@@ -260,8 +324,34 @@ export default function App() {
     }
     return '';
   });
+  const [returnTime, setReturnTime] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('oritour_return_time') || '';
+    }
+    return '';
+  });
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [ticketInputText, setTicketInputText] = useState('');
+  const [ticketImage, setTicketImage] = useState(null); // { data: base64, mimeType, name }
+
+  // --- 住宿清單與偏好交通方式 ---
+  const [lodgings, setLodgings] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('oritour_lodgings');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) { return []; }
+      }
+    }
+    return [];
+  });
+  const [newLodging, setNewLodging] = useState({ name: '', checkIn: '', checkOut: '' });
+  const [lodgingUrlInput, setLodgingUrlInput] = useState('');
+  const [transportPref, setTransportPref] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('oritour_transport_pref') || 'transit';
+    }
+    return 'transit';
+  });
   const [notificationPermission, setNotificationPermission] = useState(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       return Notification.permission;
@@ -300,6 +390,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('oritour_departure_time', departureTime);
   }, [departureTime]);
+
+  useEffect(() => {
+    localStorage.setItem('oritour_return_time', returnTime);
+  }, [returnTime]);
+
+  useEffect(() => {
+    localStorage.setItem('oritour_lodgings', JSON.stringify(lodgings));
+  }, [lodgings]);
+
+  useEffect(() => {
+    localStorage.setItem('oritour_transport_pref', transportPref);
+  }, [transportPref]);
 
   // 定時檢查出發前一天提醒
   useEffect(() => {
@@ -403,32 +505,75 @@ export default function App() {
       return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     };
 
-    const eventStart = formatToIcsUtc(reminderDate);
-    const eventEnd = formatToIcsUtc(new Date(reminderDate.getTime() + 30 * 60 * 1000)); // 30 分鐘
-
     const uncheckedItems = packingList.filter(item => !item.checked);
     const uncheckedListStr = uncheckedItems.length > 0
       ? uncheckedItems.map((item, idx) => `${idx + 1}. ${item.text}`).join('\\n')
       : '所有行李皆已準備就緒！';
+
+    // 組合多個事件：行李提醒 + 出發航班 + 回程航班
+    const buildEvent = (uid, start, end, summary, description, withAlarm) => {
+      const lines = [
+        'BEGIN:VEVENT',
+        `UID:${uid}@oritour.vercel.app`,
+        `DTSTAMP:${formatToIcsUtc(new Date())}`,
+        `DTSTART:${formatToIcsUtc(start)}`,
+        `DTEND:${formatToIcsUtc(end)}`,
+        `SUMMARY:${summary}`,
+        `DESCRIPTION:${description}`
+      ];
+      if (withAlarm) {
+        lines.push(
+          'BEGIN:VALARM',
+          'TRIGGER:-PT0M',
+          'ACTION:DISPLAY',
+          `DESCRIPTION:${summary}`,
+          'END:VALARM'
+        );
+      }
+      lines.push('END:VEVENT');
+      return lines;
+    };
+
+    const events = [
+      ...buildEvent(
+        `packing-${Date.now()}`,
+        reminderDate,
+        new Date(reminderDate.getTime() + 30 * 60 * 1000),
+        '🐕 OriTour 明日出發行李檢查提醒！',
+        `您的航班將於明天出發！請檢查以下尚未準備好的行李事項：\\n\\n${uncheckedListStr}`,
+        true
+      ),
+      ...buildEvent(
+        `flight-dep-${Date.now()}`,
+        departureDate,
+        new Date(departureDate.getTime() + 3 * 60 * 60 * 1000),
+        '✈️ 出發航班 (OriTour)',
+        '出發日到囉！記得提前 2-3 小時抵達機場辦理報到與行李托運汪！',
+        true
+      )
+    ];
+
+    // 若有設定回程時間，追加回程航班事件
+    if (returnTime) {
+      const returnDate = new Date(returnTime);
+      if (!isNaN(returnDate.getTime())) {
+        events.push(...buildEvent(
+          `flight-ret-${Date.now()}`,
+          returnDate,
+          new Date(returnDate.getTime() + 3 * 60 * 60 * 1000),
+          '🛬 回程航班 (OriTour)',
+          '回國日！記得確認退稅文件、伴手禮與護照都帶齊了汪！',
+          true
+        ));
+      }
+    }
 
     const icsContent = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
       'PRODID:-//OriTour//Travel Planner//EN',
       'CALSCALE:GREGORIAN',
-      'BEGIN:VEVENT',
-      `UID:${Date.now()}@oritour.vercel.app`,
-      `DTSTAMP:${formatToIcsUtc(new Date())}`,
-      `DTSTART:${eventStart}`,
-      `DTEND:${eventEnd}`,
-      'SUMMARY:🐕 OriTour 明日出發行李檢查提醒！',
-      `DESCRIPTION:您的航班將於明天出發！請檢查以下尚未準備好的行李事項：\\n\\n${uncheckedListStr}`,
-      'BEGIN:VALARM',
-      'TRIGGER:-PT0M', // 事件開始時提醒
-      'ACTION:DISPLAY',
-      'DESCRIPTION:OriTour行李檢查提醒！',
-      'END:VALARM',
-      'END:VEVENT',
+      ...events,
       'END:VCALENDAR'
     ].join('\r\n');
 
@@ -444,30 +589,64 @@ export default function App() {
     showToast("成功生成行事曆提醒，請點擊下載的檔案以匯入！");
   };
 
-  // --- 機票文字解析函式 (結合 Gemini API 與 Regex) ---
-  const handleParseTicket = async () => {
-    if (!ticketInputText.trim()) {
-      showToast("請先貼入機票文字汪！", "warning");
+  // --- 機票截圖轉 Base64 ---
+  const handleTicketImageSelect = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast("請選擇圖片檔案（截圖）汪！", "warning");
       return;
     }
-    
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(',')[1];
+      setTicketImage({ data: base64, mimeType: file.type, name: file.name });
+      showToast("截圖已載入，點擊「開始解析」進行辨識汪！");
+    };
+    reader.onerror = () => showToast("讀取圖片失敗，請重試汪！", "warning");
+    reader.readAsDataURL(file);
+  };
+
+  // --- 機票解析函式 (文字 + 截圖辨識，結合 Gemini API 與 Regex) ---
+  const handleParseTicket = async () => {
+    if (!ticketInputText.trim() && !ticketImage) {
+      showToast("請先貼入機票文字或上傳機票截圖汪！", "warning");
+      return;
+    }
+
+    // 截圖辨識必須透過 AI 視覺模型
+    if (ticketImage && !apiKey) {
+      showToast("截圖辨識需要 Gemini API Key，請先至「AI 設定」填入金鑰汪！", "warning");
+      setIsSettingsOpen(true);
+      return;
+    }
+
     setIsAiLoading(true);
-    
-    // 1. 若有 API Key，優先使用 Gemini API 智慧識別
+
+    // 1. 若有 API Key，優先使用 Gemini API 智慧識別（支援圖片視覺辨識）
     if (apiKey) {
       try {
-        const systemPrompt = `你是一位專業的助理。請解析以下機票文字，並提取其「出發日期與時間」。
-        回覆格式必須是嚴格合法的 JSON，只包含 "departureTime" 欄位，格式為 "YYYY-MM-DDTHH:mm"，例如 "2026-07-06T08:30"。如果找不到，請回傳空字串。
+        const systemPrompt = `你是一位專業的助理。請解析使用者提供的機票資訊（可能是文字或機票截圖圖片），並提取「去程出發日期與時間」及「回程出發日期與時間」。
+        回覆格式必須是嚴格合法的 JSON，包含 "departureTime" 與 "returnTime" 兩個欄位，格式皆為 "YYYY-MM-DDTHH:mm"，例如 "2026-07-06T08:30"。找不到的欄位請回傳空字串。
         絕對不要包含 markdown 標籤（除了 json 包裹）：
         {
-          "departureTime": "YYYY-MM-DDTHH:mm"
+          "departureTime": "YYYY-MM-DDTHH:mm",
+          "returnTime": "YYYY-MM-DDTHH:mm"
         }`;
+
+        const parts = [];
+        if (ticketInputText.trim()) {
+          parts.push({ text: `機票文字：\n${ticketInputText}` });
+        }
+        if (ticketImage) {
+          parts.push({ text: "以下是機票截圖，請以視覺辨識提取航班時間：" });
+          parts.push({ inline_data: { mime_type: ticketImage.mimeType, data: ticketImage.data } });
+        }
 
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `機票文字：\n${ticketInputText}` }] }],
+            contents: [{ parts }],
             systemInstruction: { parts: [{ text: systemPrompt }] },
             generationConfig: { responseMimeType: "application/json" }
           })
@@ -477,12 +656,17 @@ export default function App() {
         const resData = await response.json();
         const rawText = resData.candidates[0].content.parts[0].text;
         const result = JSON.parse(rawText.trim());
-        
-        if (result.departureTime) {
-          setDepartureTime(result.departureTime);
-          showToast("成功透過 AI 智慧提取機票時間汪！");
+
+        if (result.departureTime || result.returnTime) {
+          if (result.departureTime) setDepartureTime(result.departureTime);
+          if (result.returnTime) setReturnTime(result.returnTime);
+          const gotBoth = result.departureTime && result.returnTime;
+          showToast(gotBoth
+            ? "成功透過 AI 提取去程與回程時間汪！"
+            : `成功透過 AI 提取${result.departureTime ? '出發' : '回程'}時間！${result.departureTime ? '未找到回程，可手動補上' : ''}汪！`);
           setIsTicketModalOpen(false);
           setTicketInputText('');
+          setTicketImage(null);
           setIsAiLoading(false);
           return;
         }
@@ -491,35 +675,35 @@ export default function App() {
       }
     }
 
-    // 2. 降級或無 Key 時，使用 Regex 匹配
+    // 2. 降級或無 Key 時，使用 Regex 匹配文字（第一組時間視為去程、第二組視為回程）
     // 支援格式：2026/07/06 08:30, 2026-07-06 08:30, 2026.07.06 08:30 等
-    const dateRegex = /(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})/;
-    const timeRegex = /(\d{2}):(\d{2})/;
-    
-    const dateMatch = ticketInputText.match(dateRegex);
-    const timeMatch = ticketInputText.match(timeRegex);
-    
-    if (dateMatch) {
-      const year = dateMatch[1];
-      const month = dateMatch[2].padStart(2, '0');
-      const day = dateMatch[3].padStart(2, '0');
-      let hour = '08';
-      let minute = '00';
-      
-      if (timeMatch) {
-        hour = timeMatch[1];
-        minute = timeMatch[2];
+    const dateTimeRegex = /(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})(?:[^\d]{0,10}?(\d{1,2}):(\d{2}))?/g;
+    const matches = [...ticketInputText.matchAll(dateTimeRegex)];
+
+    if (matches.length > 0) {
+      const toDatetimeLocal = (m) => {
+        const year = m[1];
+        const month = m[2].padStart(2, '0');
+        const day = m[3].padStart(2, '0');
+        const hour = (m[4] || '08').padStart(2, '0');
+        const minute = m[5] || '00';
+        return `${year}-${month}-${day}T${hour}:${minute}`;
+      };
+
+      setDepartureTime(toDatetimeLocal(matches[0]));
+      if (matches.length > 1) {
+        setReturnTime(toDatetimeLocal(matches[1]));
+        showToast("成功提取去程與回程時間！(使用規則匹配) 汪！");
+      } else {
+        showToast("成功提取出發時間！未偵測到回程，可手動補上汪！");
       }
-      
-      const parsedTime = `${year}-${month}-${day}T${hour}:${minute}`;
-      setDepartureTime(parsedTime);
-      showToast("成功提取出發時間！(使用規則匹配) 汪！");
       setIsTicketModalOpen(false);
       setTicketInputText('');
+      setTicketImage(null);
     } else {
-      showToast("無法自動辨識時間，請手動在欄位中設定出發時間汪！", "warning");
+      showToast("無法自動辨識時間，請手動在欄位中設定出發與回程時間汪！", "warning");
     }
-    
+
     setIsAiLoading(false);
   };
 
@@ -538,7 +722,10 @@ export default function App() {
         itinerary: itinerary,
         packingList: packingList,
         quickNotes: quickNotes,
-        departureTime: departureTime
+        departureTime: departureTime,
+        returnTime: returnTime,
+        lodgings: lodgings,
+        transportPref: transportPref
       };
 
       // 使用 text/plain 以免觸發 CORS OPTIONS 預檢限制
@@ -591,6 +778,9 @@ export default function App() {
         if (cloudData.packingList) setPackingList(cloudData.packingList);
         if (cloudData.quickNotes !== undefined) setQuickNotes(cloudData.quickNotes);
         if (cloudData.departureTime !== undefined) setDepartureTime(cloudData.departureTime);
+        if (cloudData.returnTime !== undefined) setReturnTime(cloudData.returnTime);
+        if (cloudData.lodgings !== undefined) setLodgings(cloudData.lodgings);
+        if (cloudData.transportPref !== undefined) setTransportPref(cloudData.transportPref);
         
         // 設定目前的 ShareID 為該下載 ID
         setShareId(cloudData.id);
@@ -671,6 +861,171 @@ export default function App() {
     return stats;
   };
 
+  // --- 景點間交通估算 ---
+  // 景點可自訂 transitMode / transitMin（前往下一站）；未設定時依整體偏好交通推估
+  const getTransitMode = (spot) => {
+    const key = spot.transitMode && spot.transitMode !== 'default' ? spot.transitMode : transportPref;
+    return TRANSPORT_MODES.find(m => m.key === key) || TRANSPORT_MODES[0];
+  };
+
+  const getTransitMinutes = (spot) => {
+    const n = Number(spot.transitMin);
+    if (!isNaN(n) && n > 0) return n;
+    return getTransitMode(spot).defaultMin;
+  };
+
+  const getDailyTransitMinutes = (dayData) => {
+    if (!dayData || !dayData.spots || dayData.spots.length < 2) return 0;
+    return dayData.spots.slice(0, -1).reduce((sum, spot) => sum + getTransitMinutes(spot), 0);
+  };
+
+  const formatMinutes = (min) => {
+    if (min >= 60) {
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return m > 0 ? `${h} 小時 ${m} 分` : `${h} 小時`;
+    }
+    return `${min} 分鐘`;
+  };
+
+  const getDirectionsUrl = (fromName, toName, modeKey) => {
+    const mode = TRANSPORT_MODES.find(m => m.key === modeKey) || TRANSPORT_MODES[0];
+    return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(fromName)}&destination=${encodeURIComponent(toName)}&travelmode=${mode.mapsMode}`;
+  };
+
+  // --- 依出發日推算每天日期，並對應當晚住宿 ---
+  const getDayDate = (dayNum) => {
+    if (!departureTime) return null;
+    const d = new Date(departureTime);
+    if (isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() + (dayNum - 1));
+    return d;
+  };
+
+  const getLodgingForDay = (dayNum) => {
+    const d = getDayDate(dayNum);
+    if (!d || lodgings.length === 0) return null;
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return lodgings.find(l => l.checkIn && l.checkOut && ds >= l.checkIn && ds < l.checkOut) || null;
+  };
+
+  // --- 住宿：貼上 Google Maps 連結辨識名稱 ---
+  const parseLodgingFromUrl = () => {
+    const url = lodgingUrlInput.trim();
+    if (!url) {
+      showToast("請先貼上 Google Maps 住宿連結汪！", "warning");
+      return;
+    }
+    let name = '';
+    try {
+      const u = new URL(url);
+      // 格式 1: /maps/place/<名稱>/...
+      const placeMatch = u.pathname.match(/\/place\/([^/]+)/);
+      if (placeMatch) {
+        name = decodeURIComponent(placeMatch[1]).replace(/\+/g, ' ');
+      } else {
+        // 格式 2: ?q= 或 ?query= 參數
+        const q = u.searchParams.get('q') || u.searchParams.get('query') || '';
+        if (q && !/^[-\d.,\s]+$/.test(q)) name = q.replace(/\+/g, ' ');
+      }
+    } catch (err) { /* 非合法網址 */ }
+
+    if (name) {
+      setNewLodging({ ...newLodging, name, mapUrl: url });
+      setLodgingUrlInput('');
+      showToast(`已辨識住宿「${name}」！請補上入住 / 退房日期後新增汪！`);
+    } else {
+      showToast("無法從連結辨識名稱汪！（goo.gl 短網址請先在瀏覽器開啟後複製完整網址）", "warning");
+    }
+  };
+
+  // --- 住宿：訂房截圖 AI 分析 (需 Gemini API Key) ---
+  const handleLodgingImageSelect = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast("請選擇圖片檔案（截圖）汪！", "warning");
+      return;
+    }
+    if (!apiKey) {
+      showToast("截圖分析需要 Gemini API Key，請先至「AI 設定」填入金鑰汪！", "warning");
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = String(reader.result).split(',')[1];
+      setIsAiLoading(true);
+      try {
+        const systemPrompt = `你是一位專業的助理。請分析使用者提供的住宿訂房截圖（可能是 Booking.com / Agoda / 樂天 / 飯店官網的訂單確認畫面或確認信），提取「住宿名稱」、「入住日期」與「退房日期」。
+        回覆格式必須是嚴格合法的 JSON，包含 "name"、"checkIn"、"checkOut" 三個欄位，日期格式為 "YYYY-MM-DD"。找不到的欄位請回傳空字串。
+        絕對不要包含 markdown 標籤（除了 json 包裹）：
+        {
+          "name": "住宿名稱",
+          "checkIn": "YYYY-MM-DD",
+          "checkOut": "YYYY-MM-DD"
+        }`;
+
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [
+              { text: "以下是住宿訂房截圖，請以視覺辨識提取住宿資訊：" },
+              { inline_data: { mime_type: file.type, data: base64 } }
+            ] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+
+        if (!response.ok) throw new Error("API 呼叫失敗");
+        const resData = await response.json();
+        const rawText = resData.candidates[0].content.parts[0].text;
+        const result = JSON.parse(rawText.trim());
+
+        if (result.name || result.checkIn || result.checkOut) {
+          setNewLodging(prev => ({
+            ...prev,
+            name: result.name || prev.name,
+            checkIn: result.checkIn || prev.checkIn,
+            checkOut: result.checkOut || prev.checkOut
+          }));
+          showToast("已從截圖辨識住宿資訊！確認欄位無誤後按「+ 新增住宿」汪！");
+        } else {
+          throw new Error("截圖中未辨識到住宿資訊");
+        }
+      } catch (err) {
+        console.error("住宿截圖分析失敗：", err);
+        showToast(`截圖分析失敗汪！${err.message}`, "warning");
+      } finally {
+        setIsAiLoading(false);
+      }
+    };
+    reader.onerror = () => showToast("讀取圖片失敗，請重試汪！", "warning");
+    reader.readAsDataURL(file);
+  };
+
+  // --- 住宿清單管理 ---
+  const addLodging = (e) => {
+    e.preventDefault();
+    if (!newLodging.name.trim() || !newLodging.checkIn || !newLodging.checkOut) {
+      showToast("請填寫住宿名稱與入住 / 退房日期汪！", "warning");
+      return;
+    }
+    if (newLodging.checkOut <= newLodging.checkIn) {
+      showToast("退房日期必須晚於入住日期汪！", "warning");
+      return;
+    }
+    setLodgings([...lodgings, { id: Date.now(), ...newLodging, name: newLodging.name.trim() }]);
+    setNewLodging({ name: '', checkIn: '', checkOut: '' });
+    showToast("成功新增住宿資訊汪！");
+  };
+
+  const deleteLodging = (id) => {
+    setLodgings(lodgings.filter(l => l.id !== id));
+  };
+
   // --- 一鍵套用範本 ---
   const handleLoadPreset = (key) => {
     setItinerary(PRESETS[key]);
@@ -679,7 +1034,7 @@ export default function App() {
     setView('planner');
   };
 
-  // --- 匯率換算更新 ---
+  // --- 匯率換算更新（雙向：台幣 ⇄ 日圓） ---
   const handleTwdChange = (val) => {
     setTwdInput(val);
     const num = parseFloat(val);
@@ -687,6 +1042,16 @@ export default function App() {
       setJpyOutput(Math.round(num / exchangeRate.twd).toString());
     } else {
       setJpyOutput('');
+    }
+  };
+
+  const handleJpyChange = (val) => {
+    setJpyOutput(val);
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      setTwdInput(Math.round(num * exchangeRate.twd).toString());
+    } else {
+      setTwdInput('');
     }
   };
 
@@ -836,12 +1201,103 @@ export default function App() {
     }
   };
 
+  // --- 由小柴安排當日行程 (匯入前 N 天已排行程、偏好交通、住宿與航班資訊) ---
+  const handleAiPlanDay = async () => {
+    if (!apiKey) {
+      showToast("「由小柴安排」需要 Gemini API Key，請先至「AI 設定」填入金鑰汪！", "warning");
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    const dayIdx = activeDay - 1;
+    const prevDays = itinerary.slice(0, dayIdx).map(d => ({
+      dayNum: d.dayNum,
+      title: d.title,
+      spots: (d.spots || []).map(s => ({ time: s.time, name: s.name, tagType: s.tagType }))
+    }));
+    const dayDate = getDayDate(activeDay);
+    const lodging = getLodgingForDay(activeDay);
+    const prefLabel = (TRANSPORT_MODES.find(m => m.key === transportPref) || TRANSPORT_MODES[0]).label;
+
+    setChatMessages(prev => [...prev, { sender: 'user', text: `🐾 請小柴幫我安排 Day ${activeDay} 的一整天行程！` }]);
+    setIsAiLoading(true);
+
+    try {
+      const systemPrompt = `你是一位專業的日本導遊（名為小柴導遊，口吻俏皮溫暖，常帶「汪！」）。請為旅客規劃 Day ${activeDay} 的一整天行程。
+
+【旅行背景資訊】
+- 航班：出發時間 ${departureTime || '未設定'}，回國時間 ${returnTime || '未設定'}。若 Day ${activeDay} 是出發日或回國日，請預留機場交通與報到時間，行程要縮短。
+- Day ${activeDay} 的日期：${dayDate ? dayDate.toLocaleDateString('zh-TW') : '未知（未設定出發時間）'}
+- 當晚住宿：${lodging ? `${lodging.name}（${lodging.checkIn} 入住 ~ ${lodging.checkOut} 退房）` : '未登記'}。行程動線請以住宿為起點與終點規劃。
+- 偏好交通方式：${prefLabel}。景點間移動請以此為主，並填寫 transitMin 預估分鐘數。
+- 全部住宿清單：${JSON.stringify(lodgings)}
+
+【前 ${prevDays.length} 天已排行程（請避免重複安排相同景點，並延續旅程節奏）】
+${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先前行程）'}
+
+【規劃要求】
+1. 安排 4~6 個景點，時間軸合理（含用餐時段），從早到晚排序。
+2. 每個景點必須包含：time ("HH:mm")、name、desc、tip、tagType (sightseeing/shopping/food/hotel/transport/custom 之一)、tagName (含 emoji)、cost (日圓數字，不能是字串)、mapUrl (格式：https://www.google.com/maps/search/?api=1&query=景點名稱+城市)、memo、transitMode ("default")、transitMin (前往下一站的預估分鐘數字)。
+3. 同時給這一天取一個 title (主題)、path (動線，例: 日暮里 ➔ 淺草 ➔ 上野)。
+
+回覆格式必須是嚴格合法的 JSON，不能包含額外的 markdown 解釋（除了 json 包裹）：
+{
+  "title": "這一天的主題",
+  "path": "主要動線",
+  "spots": [ ...景點陣列 ],
+  "reply": "小柴導遊的親切說明"
+}`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `請開始規劃 Day ${activeDay} 的行程汪！` }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      if (!response.ok) throw new Error("API 響應錯誤，請確認 Key 是否正確");
+      const resData = await response.json();
+      const rawText = resData.candidates[0].content.parts[0].text;
+      const result = JSON.parse(rawText.trim());
+
+      if (result.spots && Array.isArray(result.spots) && result.spots.length > 0) {
+        const sortedSpots = [...result.spots].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+        const newItinerary = itinerary.map(day => {
+          if (day.dayNum === activeDay) {
+            return {
+              ...day,
+              title: result.title || day.title || `Day ${activeDay} 小柴推薦行程`,
+              path: result.path || day.path,
+              spots: sortedSpots
+            };
+          }
+          return day;
+        });
+        setItinerary(newItinerary);
+        showToast(`小柴已為 Day ${activeDay} 排好 ${sortedSpots.length} 個行程汪！`);
+        setChatMessages(prev => [...prev, { sender: 'ai', text: result.reply || `Day ${activeDay} 排好囉！小柴依照您的住宿、航班與交通偏好精心規劃，快看看時間軸吧汪！🐕` }]);
+      } else {
+        throw new Error("AI 未回傳有效的行程內容");
+      }
+    } catch (err) {
+      console.error("小柴安排行程失敗：", err);
+      showToast(`小柴安排失敗汪！${err.message}`, "warning");
+      setChatMessages(prev => [...prev, { sender: 'ai', text: `汪嗚！安排 Day ${activeDay} 時出了點狀況：${err.message}。請稍後再試，或用對話直接告訴小柴想去哪裡！` }]);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
 
   // --- 景點 Modal 處理邏輯 ---
   const openEditModal = (dayIdx, spotIdx) => {
     const isEdit = spotIdx !== -1;
     const spotData = isEdit ? itinerary[dayIdx].spots[spotIdx] : {
-      time: "12:00", name: "", desc: "", tip: "", tagType: "sightseeing", tagName: "🌸 觀光祈福", cost: 0, mapUrl: "", memo: ""
+      time: "12:00", name: "", desc: "", tip: "", tagType: "sightseeing", tagName: "🌸 觀光祈福", cost: 0, mapUrl: "", memo: "",
+      transitMode: "default", transitMin: ""
     };
     setEditData({ dayIdx, spotIdx, data: { ...spotData } });
     setIsModalOpen(true);
@@ -917,14 +1373,14 @@ export default function App() {
     const nextDayNum = itinerary.length + 1;
     const newDay = {
       dayNum: nextDayNum,
-      title: `自訂精彩的一天`,
-      companion: "自由行",
-      path: "自訂探索動線",
+      title: "",
+      companion: "",
+      path: "",
       spots: []
     };
     setItinerary([...itinerary, newDay]);
     setActiveDay(nextDayNum);
-    showToast(`成功建立第 ${nextDayNum} 天行程汪！現在可以開始編輯或使用 AI 助理囉！`);
+    showToast(`成功建立第 ${nextDayNum} 天空白行程汪！可手動編輯，或點「由小柴安排」讓 AI 自動規劃！`);
   };
 
   const deleteCurrentDay = () => {
@@ -968,18 +1424,64 @@ export default function App() {
 
 
   return (
-    <div className="min-h-screen bg-[#FCFBF8] text-[#2C2421] font-sans selection:bg-[#EEDBC5]">
-      
-      {/* 頂部極簡精緻和風 Navigation Header */}
-      <header className="border-b-2 border-[#EADEC6] bg-white sticky top-0 z-40 shadow-xs">
+    <div className="min-h-screen text-[#33302B] font-sans selection:bg-[#EEDBC5]">
+
+      {/* 開場柴犬 Logo 動畫 */}
+      {showIntro && (
+        <div
+          className={`fixed inset-0 z-[100] bg-[#F6F3EA] flex items-center justify-center transition-opacity duration-700 ${introFading ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+          onClick={dismissIntro}
+        >
+          <video
+            src="/intro/shiba-intro.mp4"
+            autoPlay
+            muted
+            playsInline
+            onEnded={dismissIntro}
+            onError={dismissIntro}
+            className="w-full max-w-lg px-6 select-none"
+          />
+          <button
+            onClick={dismissIntro}
+            className="absolute bottom-8 right-6 px-4 py-1.5 bg-white/70 border border-[#DCCFB4] text-[#85796B] hover:text-[#C75A51] hover:border-[#C75A51] rounded-full text-[11px] font-bold transition-all backdrop-blur-sm"
+          >
+            跳過 ▸
+          </button>
+        </div>
+      )}
+
+      {/* 懸浮回頂按鈕 */}
+      {showBackToTop && (
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="back-to-top fixed bottom-24 right-5 z-50 w-11 h-11 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-[#FBF4E6] rounded-full shadow-lg flex flex-col items-center justify-center print:hidden"
+          title="回到最上方"
+          aria-label="回到最上方"
+        >
+          <span className="text-sm leading-none">▲</span>
+          <span className="text-[9px] font-black leading-none mt-0.5">頂</span>
+        </button>
+      )}
+
+      {/* 頂部和紙 Navigation Header：圓相墨圈柴犬 + 朱印章名 */}
+      <header className="border-b-2 border-[#DCCFB4] bg-[#FEFCF5]/90 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('welcome')}>
-            <span className="text-3xl filter drop-shadow-sm animate-pulse">🐕</span>
+          <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setView('welcome')}>
+            <span className="relative flex items-center justify-center w-11 h-11">
+              {/* 圓相 enso 墨圈 */}
+              <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full opacity-80 group-hover:rotate-[360deg] transition-transform duration-[1.2s] ease-in-out">
+                <path d="M 50 8 A 42 42 0 1 0 80 20" fill="none" stroke="#3D362E" strokeWidth="7" strokeLinecap="round" />
+              </svg>
+              <ShibaInk className="w-7 h-7" />
+            </span>
             <div>
-              <h1 className="text-xl font-extrabold text-[#593E30] tracking-wide flex items-center gap-1.5">
-                OriTour <span className="text-xs px-2 py-0.5 bg-[#C75A51] text-white rounded-full">和風規劃師</span>
+              <h1 className="text-xl font-black text-[#4D4137] tracking-wide flex items-center gap-2">
+                OriTour
+                <span className="text-[10px] px-1.5 py-1 bg-[#C75A51] text-[#FBF4E6] rounded-md leading-none tracking-widest shadow-sm rotate-2" style={{ writingMode: 'initial' }}>
+                  和風規劃師
+                </span>
               </h1>
-              <p className="text-xs text-[#8C7D73] font-medium flex items-center gap-1">
+              <p className="text-xs text-[#85796B] font-medium flex items-center gap-1">
                 <span>隨身助理「小柴」陪伴</span> • <span className="text-[#3B6C57]">本地自動存檔中</span>
               </p>
             </div>
@@ -1011,7 +1513,7 @@ export default function App() {
             </button>
             <button 
               onClick={() => { setView(view === 'welcome' ? 'planner' : 'welcome') }}
-              className="px-3.5 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all"
+              className="px-3.5 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all"
             >
               {view === 'welcome' ? '進入規劃板 ➔' : '返回首頁'}
             </button>
@@ -1035,15 +1537,18 @@ export default function App() {
         </div>
       )}
 
-      {/* 訊息通知吐司條 (Toast) */}
+      {/* 訊息通知吐司條 (Toast)：朱印蓋章進場 */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-xl border-l-4 text-xs font-bold transition-all animate-bounce flex items-center gap-2 ${
-          toast.type === 'warning' 
-            ? 'bg-yellow-50 text-yellow-800 border-yellow-500' 
-            : 'bg-green-50 text-green-800 border-green-500'
+        <div className={`stamp-in fixed bottom-6 right-6 z-50 max-w-sm px-5 py-3 rounded-[18px_22px_16px_24px] shadow-xl border-2 text-xs font-bold flex items-center gap-2.5 bg-[#FEFCF5] ${
+          toast.type === 'warning'
+            ? 'text-[#9A6B2F] border-[#D9B36C]'
+            : 'text-[#3B6C57] border-[#9DBBA9]'
         }`}>
-          <span>🐕</span>
-          <span>{toast.msg}</span>
+          <span className="flex items-center gap-0.5 flex-shrink-0">
+            <ShibaInk className="w-7 h-7" />
+            {toast.type === 'warning' && <span className="text-sm">💦</span>}
+          </span>
+          <span className="leading-relaxed">{toast.msg}</span>
         </div>
       )}
 
@@ -1058,11 +1563,10 @@ export default function App() {
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FAF2EB] border border-[#ECD9C9] text-[#C75A51] rounded-full text-xs font-bold">
               <Sparkles size={14} /> 新增 3 大精美範本，點擊即時暢玩！
             </div>
-            <h2 className="text-4xl md:text-5xl font-black text-[#593E30] leading-tight">
+            <h2 className="text-4xl md:text-5xl font-black text-[#4D4137] leading-tight">
               打造您靈魂深處的 <br />
-              <span className="text-[#C75A51] relative inline-block">
+              <span className="text-[#C75A51] brush-underline inline-block">
                 小眾日本私房旅行
-                <span className="absolute bottom-1 left-0 w-full h-3 bg-yellow-100 -z-10 rounded"></span>
               </span>
             </h2>
             <p className="text-[#6D5D55] leading-relaxed text-sm md:text-base">
@@ -1116,9 +1620,15 @@ export default function App() {
 
           {/* 右側：吉祥物與亮點介紹卡片 */}
           <div className="w-full lg:w-96 flex flex-col gap-4">
-            <div className="bg-[#FAF2EB] border-2 border-[#ECD9C9] p-6 rounded-2xl text-center space-y-4">
-              <span className="text-6xl drop-shadow-md inline-block animate-bounce">🐕</span>
-              <h3 className="font-bold text-lg text-[#593E30]">我是導遊小柴（Shiba）</h3>
+            <div className="washi-card p-6 text-center space-y-4">
+              <span className="relative inline-flex items-center justify-center w-32 h-32">
+                {/* 圓相 enso 墨圈環繞小柴 */}
+                <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full opacity-75">
+                  <path d="M 50 5 A 45 45 0 1 0 83 17" fill="none" stroke="#3D362E" strokeWidth="5.5" strokeLinecap="round" />
+                </svg>
+                <ShibaInk className="w-[5.5rem] h-[5.5rem] float-soft" />
+              </span>
+              <h3 className="font-bold text-lg text-[#4D4137]">我是導遊小柴（Shiba）</h3>
               <p className="text-xs text-[#8C7D73] leading-relaxed">
                 我會用心打理你旅程中的所有開銷。無論你想吃好吃的炸豬排，還是想去古意盎然的茶屋，只要告訴我，保證為你使命必達！汪！
               </p>
@@ -1139,31 +1649,127 @@ export default function App() {
         <main className="max-w-7xl mx-auto px-4 md:px-6 py-8">
           
           {/* 行程總攬 Banner 卡片 */}
-          <div className="bg-gradient-to-r from-[#FAF6F0] to-[#F1ECE3] border-2 border-[#EADEC6] rounded-2xl p-6 mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-            <div className="space-y-1">
-              <span className="text-xs font-bold text-[#C75A51] bg-red-50 border border-red-100 px-2.5 py-0.5 rounded-full inline-block">
-                🇯🇵 專屬客製化旅行手冊
-              </span>
-              <h2 className="text-2xl font-black text-[#593E30]">日本自主行完美規劃</h2>
-              <p className="text-xs text-[#8C7D73]">
-                全體共 {itinerary.length} 日精彩行程 • 全程估計總花費為 <span className="font-extrabold text-[#C75A51]">¥{getGrandTotalCost().toLocaleString()}</span> 日圓
-              </p>
+          <div className="washi-card ink-wash p-6 mb-8 space-y-5">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-[#C75A51] bg-red-50 border border-red-100 px-2.5 py-0.5 rounded-full inline-block">
+                  🇯🇵 專屬客製化旅行手冊
+                </span>
+                <h2 className="text-2xl font-black text-[#593E30]">日本自主行完美規劃</h2>
+                <p className="text-xs text-[#8C7D73]">
+                  全體共 {itinerary.length} 日精彩行程 • 全程估計<strong>總預算</strong>為 <span className="font-extrabold text-[#C75A51] text-sm">¥{getGrandTotalCost().toLocaleString()}</span> 日圓
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={addNewDay}
+                  className="px-4 py-2 bg-[#3B6C57] hover:bg-[#2D5343] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs"
+                >
+                  <Plus size={14} /> 新增天數 (Day {itinerary.length + 1})
+                </button>
+                <button
+                  onClick={deleteCurrentDay}
+                  className="px-4 py-2 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all"
+                  title="刪除當前天數行程"
+                >
+                  <Trash2 size={14} /> 刪除當天
+                </button>
+              </div>
             </div>
-            
-            <div className="flex flex-wrap gap-2">
-              <button 
-                onClick={addNewDay}
-                className="px-4 py-2 bg-[#3B6C57] hover:bg-[#2D5343] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs"
+
+            {/* 出國流程追蹤：機票 ➔ 住宿 ➔ 偏好交通 */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div
+                onClick={() => jumpToRef(flightPanelRef)}
+                title="點擊前往航班設定"
+                className={`p-3 rounded-xl border-2 bg-white/70 cursor-pointer hover:border-[#C75A51] transition-all ${departureTime && returnTime ? 'border-[#D5E6DF]' : 'border-dashed border-[#EADEC6]'}`}
               >
-                <Plus size={14} /> 新增天數 (Day {itinerary.length + 1})
-              </button>
-              <button 
-                onClick={deleteCurrentDay}
-                className="px-4 py-2 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all"
-                title="刪除當前天數行程"
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-black text-[#8C7D73]">STEP 1 • 機票時間</span>
+                  <span className="text-xs">{departureTime && returnTime ? '✅' : '⬜'}</span>
+                </div>
+                <p className="text-[11px] font-bold text-[#593E30] leading-relaxed">
+                  ✈️ 出發：{departureTime ? new Date(departureTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : <span className="text-[#C75A51]">尚未設定</span>}
+                  <br />
+                  🛬 回國：{returnTime ? new Date(returnTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : <span className="text-[#C75A51]">尚未設定</span>}
+                </p>
+              </div>
+              <div
+                onClick={() => jumpToRef(lodgingPanelRef)}
+                title="點擊前往住宿設定"
+                className={`p-3 rounded-xl border-2 bg-white/70 cursor-pointer hover:border-[#C75A51] transition-all ${lodgings.length > 0 ? 'border-[#D5E6DF]' : 'border-dashed border-[#EADEC6]'}`}
               >
-                <Trash2 size={14} /> 刪除當天
-              </button>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-black text-[#8C7D73]">STEP 2 • 住宿時間</span>
+                  <span className="text-xs">{lodgings.length > 0 ? '✅' : '⬜'}</span>
+                </div>
+                <p className="text-[11px] font-bold text-[#593E30] leading-relaxed">
+                  🏨 已登記 {lodgings.length} 筆住宿
+                  {lodgings.length > 0
+                    ? <><br />{lodgings[0].name}（{lodgings[0].checkIn} 入住）{lodgings.length > 1 ? ` 等 ${lodgings.length} 間` : ''}</>
+                    : <><br /><span className="text-[#C75A51]">點擊前往「出國基本資訊」新增</span></>}
+                </p>
+              </div>
+              <div
+                onClick={() => jumpToRef(lodgingPanelRef)}
+                title="點擊前往偏好交通設定"
+                className="p-3 rounded-xl border-2 border-[#D5E6DF] bg-white/70 cursor-pointer hover:border-[#C75A51] transition-all"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-black text-[#8C7D73]">STEP 3 • 偏好交通</span>
+                  <span className="text-xs">✅</span>
+                </div>
+                <p className="text-[11px] font-bold text-[#593E30] leading-relaxed">
+                  {(TRANSPORT_MODES.find(m => m.key === transportPref) || TRANSPORT_MODES[0]).label}
+                  <br />
+                  <span className="text-[#8C7D73] font-medium">景點間交通將以此推估時間</span>
+                </p>
+              </div>
+            </div>
+
+            {/* 分天行程總覽表：時間 / 景點 / 住宿 / 交通 / 花費 */}
+            <div className="bg-white/80 border border-[#EADEC6] rounded-xl overflow-x-auto">
+              <table className="w-full text-left text-[11px] min-w-[560px]">
+                <thead>
+                  <tr className="border-b border-[#EADEC6] text-[10px] text-[#8C7D73] font-black">
+                    <th className="px-3 py-2">天數</th>
+                    <th className="px-3 py-2">日期</th>
+                    <th className="px-3 py-2">主題</th>
+                    <th className="px-3 py-2">活動時間</th>
+                    <th className="px-3 py-2">景點</th>
+                    <th className="px-3 py-2">住宿</th>
+                    <th className="px-3 py-2">交通預估</th>
+                    <th className="px-3 py-2 text-right">當日花費</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itinerary.map(day => {
+                    const dayDate = getDayDate(day.dayNum);
+                    const lodging = getLodgingForDay(day.dayNum);
+                    const spots = day.spots || [];
+                    const timeRange = spots.length > 0 ? `${spots[0].time} ~ ${spots[spots.length - 1].time}` : '—';
+                    const transitMin = getDailyTransitMinutes(day);
+                    return (
+                      <tr
+                        key={day.dayNum}
+                        onClick={() => jumpToDay(day.dayNum)}
+                        title={`點擊跳轉至 Day ${day.dayNum} 行程`}
+                        className={`border-b border-[#F3EFE9] last:border-0 cursor-pointer transition-all ${activeDay === day.dayNum ? 'bg-[#FCF5F3]' : 'hover:bg-[#FAF8F5]'}`}
+                      >
+                        <td className="px-3 py-2 font-black text-[#C75A51] whitespace-nowrap">Day {day.dayNum}</td>
+                        <td className="px-3 py-2 text-[#8C7D73] whitespace-nowrap">{dayDate ? dayDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }) : '—'}</td>
+                        <td className="px-3 py-2 font-bold text-[#593E30] max-w-[160px] truncate">{day.title}</td>
+                        <td className="px-3 py-2 text-[#6D5D55] whitespace-nowrap">{timeRange}</td>
+                        <td className="px-3 py-2 text-[#6D5D55] whitespace-nowrap">{spots.length} 個</td>
+                        <td className="px-3 py-2 text-[#6D5D55] max-w-[120px] truncate">{lodging ? `🏨 ${lodging.name}` : '—'}</td>
+                        <td className="px-3 py-2 text-[#3B6C57] font-bold whitespace-nowrap">{transitMin > 0 ? `🚃 約 ${formatMinutes(transitMin)}` : '—'}</td>
+                        <td className="px-3 py-2 text-right font-black text-[#593E30] whitespace-nowrap">¥{getDailyTotalCost(day).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -1173,10 +1779,10 @@ export default function App() {
             <div className="lg:col-span-4 space-y-6">
               
               {/* AI 規劃助理小柴對話窗 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl shadow-xs flex flex-col h-[480px]">
+              <div className="washi-card shadow-xs flex flex-col h-[480px]">
                 <div className="bg-[#FAF8F5] px-4 py-3 flex items-center justify-between border-b border-[#EADEC6] rounded-t-2xl">
                   <div className="flex items-center gap-2">
-                    <span className="text-base">🐕</span>
+                    <ShibaInk className="w-6 h-6" />
                     <h4 className="text-xs font-black text-[#593E30]">小柴導遊 (離線智慧 AI)</h4>
                   </div>
                   <span className="inline-flex items-center gap-1 text-[10px] text-[#3B6C57] font-bold">
@@ -1206,28 +1812,28 @@ export default function App() {
                 </div>
 
                 {/* 智慧一鍵快選提示指令 */}
-                <div className="p-2 border-t border-[#EADEC6] flex flex-wrap gap-1 bg-[#FAF8F5]">
+                <div className="p-2 border-t border-[#EADEC6] flex overflow-x-auto flex-nowrap gap-1 bg-[#FAF8F5] scrollbar-none">
                   <button 
                     onClick={() => executeAiQuery('🍰 推薦在下午 15:00 左右加入好吃的在地人氣甜點店汪')} 
-                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all"
+                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all flex-shrink-0 whitespace-nowrap"
                   >
                     🍰 加甜點
                   </button>
                   <button 
                     onClick={() => executeAiQuery('☕ 好想在午後找間質感咖啡廳歇歇腳汪')} 
-                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all"
+                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all flex-shrink-0 whitespace-nowrap"
                   >
                     ☕ 找咖啡館
                   </button>
                   <button 
                     onClick={() => executeAiQuery('🛍️ 幫我安插一個松本清藥妝購物行程吧汪')} 
-                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all"
+                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all flex-shrink-0 whitespace-nowrap"
                   >
                     🛍️ 免稅藥妝
                   </button>
                   <button 
                     onClick={() => executeAiQuery('💸 請幫我降低現有景點不必要的高預算，改走省錢平替汪')} 
-                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all"
+                    className="text-[10px] bg-white border border-[#EADEC6] px-2.5 py-1 rounded-full text-[#8C7D73] hover:text-[#C75A51] hover:border-[#C75A51] transition-all flex-shrink-0 whitespace-nowrap"
                   >
                     💸 降低預算
                   </button>
@@ -1255,7 +1861,7 @@ export default function App() {
               </div>
 
               {/* 實用工具箱 1：預算分析條 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl p-5 space-y-4 shadow-xs">
+              <div className="washi-card p-5 space-y-4 shadow-xs">
                 <div className="border-b border-[#FAF8F5] pb-2">
                   <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
                     <DollarSign size={14} className="text-[#C75A51]" />
@@ -1288,32 +1894,39 @@ export default function App() {
               </div>
 
               {/* 實用工具箱 2：日幣快速算盤 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl p-5 space-y-3 shadow-xs">
+              <div className="washi-card p-5 space-y-3 shadow-xs">
                 <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
                   <RefreshCw size={14} className="text-[#3B6C57]" />
-                  <span>台幣換算日圓（依即時 0.21）</span>
+                  <span>台幣 ⇄ 日圓 雙向換算（匯率 {exchangeRate.twd}）</span>
                 </h4>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
                   <div>
                     <label className="text-[10px] text-[#8C7D73] font-bold block mb-1">台幣 (TWD)</label>
-                    <input 
-                      type="number" 
-                      value={twdInput} 
+                    <input
+                      type="number"
+                      value={twdInput}
                       onChange={e => handleTwdChange(e.target.value)}
-                      className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
+                      placeholder="輸入台幣"
+                      className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs font-extrabold text-[#593E30] focus:outline-none focus:border-[#C75A51]"
                     />
                   </div>
+                  <span className="text-[#8C7D73] font-black text-sm pb-1.5">⇄</span>
                   <div>
-                    <label className="text-[10px] text-[#8C7D73] font-bold block mb-1">等值日圓 (JPY)</label>
-                    <div className="w-full bg-[#F3EFE9] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs font-extrabold text-[#593E30]">
-                      ¥ {parseFloat(jpyOutput).toLocaleString()}
-                    </div>
+                    <label className="text-[10px] text-[#8C7D73] font-bold block mb-1">日圓 (JPY)</label>
+                    <input
+                      type="number"
+                      value={jpyOutput}
+                      onChange={e => handleJpyChange(e.target.value)}
+                      placeholder="輸入日圓"
+                      className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs font-extrabold text-[#593E30] focus:outline-none focus:border-[#C75A51]"
+                    />
                   </div>
                 </div>
+                <p className="text-[10px] text-[#8C7D73]">💡 任一邊輸入金額，另一邊即時換算。</p>
               </div>
 
               {/* 實用工具箱 3：行李必備清單 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl p-5 space-y-3 shadow-xs">
+              <div className="washi-card p-5 space-y-3 shadow-xs">
                 <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
                   <CheckCircle2 size={14} className="text-[#3B6C57]" />
                   <span>行李出發檢查點</span>
@@ -1351,7 +1964,7 @@ export default function App() {
               </div>
 
               {/* 實用工具箱 4：機票出發提醒 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl p-5 space-y-3 shadow-xs">
+              <div ref={flightPanelRef} className="washi-card p-5 space-y-3 shadow-xs scroll-mt-28">
                 <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
                   <Clock size={14} className="text-[#C75A51]" />
                   <span>✈️ 航班提醒與行事曆</span>
@@ -1368,11 +1981,21 @@ export default function App() {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] text-[#8C7D73] font-bold block">手動調整出發時間：</label>
-                    <input 
-                      type="datetime-local" 
+                    <label className="text-[10px] text-[#8C7D73] font-bold block">✈️ 出發時間（去程）：</label>
+                    <input
+                      type="datetime-local"
                       value={departureTime}
                       onChange={e => setDepartureTime(e.target.value)}
+                      className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none text-[#593E30] font-bold"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-[#8C7D73] font-bold block">🛬 回國時間（回程）：</label>
+                    <input
+                      type="datetime-local"
+                      value={returnTime}
+                      onChange={e => setReturnTime(e.target.value)}
                       className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none text-[#593E30] font-bold"
                     />
                   </div>
@@ -1404,6 +2027,161 @@ export default function App() {
                 </div>
               </div>
 
+              {/* 實用工具箱 5：出國基本資訊（住宿 & 偏好交通） */}
+              <div ref={lodgingPanelRef} className="washi-card p-5 space-y-4 shadow-xs scroll-mt-28">
+                <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
+                  <Compass size={14} className="text-[#3B6C57]" />
+                  <span>🧭 出國基本資訊</span>
+                </h4>
+
+                {/* 偏好交通方式 */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-[#8C7D73] font-bold block">🚃 偏好交通方式（用於景點間時間推估）：</label>
+                  <select
+                    value={transportPref}
+                    onChange={e => setTransportPref(e.target.value)}
+                    className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none text-[#593E30] font-bold"
+                  >
+                    {TRANSPORT_MODES.map(m => (
+                      <option key={m.key} value={m.key}>{m.label}（預設約 {m.defaultMin} 分/段）</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 住宿清單 */}
+                <div className="space-y-2 pt-1 border-t border-dashed border-[#EADEC6]">
+                  <label className="text-[10px] text-[#8C7D73] font-bold block pt-2">🏨 住宿時間登記（依日期自動對應每日行程）：</label>
+
+                  {lodgings.length > 0 && (
+                    <div className="space-y-1.5">
+                      {lodgings.map(l => (
+                        <div key={l.id} className="flex items-center justify-between gap-2 text-[11px] bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-2.5 py-1.5">
+                          <div className="min-w-0">
+                            <p className="font-bold text-[#593E30] truncate">🏨 {l.name}</p>
+                            <p className="text-[10px] text-[#8C7D73]">{l.checkIn} 入住 ➔ {l.checkOut} 退房</p>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {l.mapUrl && (
+                              <a
+                                href={l.mapUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-blue-500 hover:text-blue-700 p-0.5"
+                                title="開啟 Google Maps"
+                              >
+                                <MapPin size={12} />
+                              </a>
+                            )}
+                            <button onClick={() => deleteLodging(l.id)} className="text-red-400 hover:text-red-600 p-0.5">
+                              <X size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form onSubmit={addLodging} className="space-y-1.5">
+                    {/* 貼上 Google Maps 連結自動辨識名稱 */}
+                    <div className="flex gap-1.5">
+                      <input
+                        type="url"
+                        value={lodgingUrlInput}
+                        onChange={e => setLodgingUrlInput(e.target.value)}
+                        placeholder="🔗 貼上 Google Maps 住宿連結..."
+                        className="flex-1 min-w-0 text-[10px] px-2.5 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={parseLodgingFromUrl}
+                        className="px-2.5 py-1.5 bg-[#593E30] hover:bg-[#463125] text-white rounded-lg text-[10px] font-bold transition-all flex-shrink-0"
+                      >
+                        辨識
+                      </button>
+                    </div>
+
+                    {/* 訂房截圖 AI 分析 */}
+                    <div className="space-y-1">
+                      <label className="text-[9px] text-[#8C7D73] font-bold block">
+                        📸 或上傳訂房截圖 AI 分析{!apiKey && <span className="text-[#C75A51]">（需 Gemini API Key）</span>}：
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isAiLoading}
+                        onChange={e => { handleLodgingImageSelect(e.target.files && e.target.files[0]); e.target.value = ''; }}
+                        className="w-full text-[9px] text-[#8C7D73] file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:bg-[#593E30] file:text-white file:text-[9px] file:font-bold file:cursor-pointer bg-[#FAF8F5] border border-[#EADEC6] rounded-lg p-1 disabled:opacity-50"
+                      />
+                      {isAiLoading && (
+                        <p className="text-[9px] text-[#8C7D73] font-bold animate-pulse">🌀 小柴辨識中...汪！</p>
+                      )}
+                    </div>
+
+                    <input
+                      type="text"
+                      value={newLodging.name}
+                      onChange={e => setNewLodging({ ...newLodging, name: e.target.value })}
+                      placeholder="住宿名稱（例: 日暮里 APA Hotel）"
+                      className="w-full text-[11px] px-2.5 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                    />
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div>
+                        <label className="text-[9px] text-[#8C7D73] font-bold block">入住日</label>
+                        <input
+                          type="date"
+                          value={newLodging.checkIn}
+                          onChange={e => setNewLodging({ ...newLodging, checkIn: e.target.value })}
+                          className="w-full text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] text-[#8C7D73] font-bold block">退房日</label>
+                        <input
+                          type="date"
+                          value={newLodging.checkOut}
+                          onChange={e => setNewLodging({ ...newLodging, checkOut: e.target.value })}
+                          className="w-full text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    <button type="submit" className="w-full py-1.5 bg-[#3B6C57] hover:bg-[#2D5343] text-white rounded-lg text-[10px] font-bold transition-all">
+                      + 新增住宿
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* 實用工具箱 6：Visit Japan Web 入境準備 */}
+              <div className="washi-card p-5 space-y-3 shadow-xs">
+                <h4 className="text-xs font-black text-[#593E30] flex items-center gap-1.5">
+                  <span>🛂 Visit Japan Web 入境準備</span>
+                </h4>
+                <p className="text-[10px] text-[#8C7D73] leading-relaxed">
+                  日本入境審查與海關申報的官方線上服務，出發前填好可免排長龍快速通關汪！
+                </p>
+
+                <a
+                  href="https://services.digital.go.jp/zh-cmn-hant/visit-japan-web"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block w-full py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-lg text-[11px] font-black text-center transition-all"
+                >
+                  🔗 前往 Visit Japan Web（繁中官方頁面）
+                </a>
+
+                <div className="bg-[#FAF8F5] border border-[#EADEC6] rounded-lg p-3 space-y-1.5">
+                  <p className="text-[10px] font-black text-[#593E30]">📋 申請注意事項：</p>
+                  <ol className="text-[10px] text-[#6D5D55] leading-relaxed space-y-1 list-decimal list-inside font-semibold">
+                    <li>建議<strong>出發前 1～2 週</strong>註冊帳號並填寫資料，避免臨行匆忙。</li>
+                    <li>需準備：<strong>護照</strong>、<strong>航班編號</strong>、<strong>在日住宿地址與電話</strong>（可先在左上「出國基本資訊」登記住宿）。</li>
+                    <li>完成「入境審查」與「海關申報」後會各產生一組 <strong>QR Code</strong>。</li>
+                    <li>抵達機場前先把 QR Code <strong>截圖保存</strong>，機場網路不穩時可離線出示汪！</li>
+                    <li>同行家人（如孩童）可用<strong>同一帳號</strong>以「同行家人」方式一起登錄。</li>
+                    <li>資料填寫後仍可修改；每次入境日本都要建立新的入境預定。</li>
+                  </ol>
+                </div>
+              </div>
+
               {/* 隨手記貼便籤 */}
               <div className="bg-amber-50/50 border-2 border-amber-200 rounded-2xl p-5 space-y-2 shadow-xs">
                 <h4 className="text-xs font-black text-amber-900 flex items-center gap-1.5">
@@ -1421,18 +2199,36 @@ export default function App() {
             </div>
 
             {/* 右側：主行程時間軸看板與日程管理 */}
-            <div className="lg:col-span-8">
+            <div ref={dayTimelineRef} className="lg:col-span-8 scroll-mt-28">
               
+              {/* 由小柴安排本日行程 (需 API Key) */}
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+                <span className="text-[10px] font-bold text-[#8C7D73]">
+                  {apiKey
+                    ? `🐾 讓小柴參考前 ${activeDay - 1} 天行程、住宿、航班與偏好交通，自動排好這一天！`
+                    : '🔒 「由小柴安排」需先至「AI 設定」填入 Gemini API Key 才能使用'}
+                </span>
+                <button
+                  onClick={handleAiPlanDay}
+                  disabled={!apiKey || isAiLoading}
+                  title={!apiKey ? '請先設定 Gemini API Key' : `由 AI 自動安排 Day ${activeDay} 行程`}
+                  className="px-4 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#C75A51]"
+                >
+                  <Sparkles size={14} />
+                  {isAiLoading ? '小柴規劃中...' : `🐕 由小柴安排 Day ${activeDay}`}
+                </button>
+              </div>
+
               {/* 日程天數 Tabs 切換 */}
-              <div className="flex flex-wrap gap-1.5 border-b border-[#EADEC6] mb-6">
+              <div className="flex overflow-x-auto flex-nowrap gap-1.5 border-b-2 border-[#DCCFB4] mb-6 scrollbar-none">
                 {itinerary.map(day => (
                   <button
                     key={day.dayNum}
                     onClick={() => setActiveDay(day.dayNum)}
-                    className={`px-4.5 py-3 text-xs font-black rounded-t-xl transition-all flex items-center gap-1 ${
+                    className={`px-4.5 py-3 text-xs font-black rounded-t-xl transition-all flex items-center gap-1 flex-shrink-0 whitespace-nowrap ${
                       activeDay === day.dayNum
-                        ? 'bg-white border-t-2 border-x-2 border-[#EADEC6] text-[#C75A51] -mb-[1px] z-10'
-                        : 'bg-[#F2ECE1]/60 text-[#8C7D73] hover:bg-[#FAF8F5]'
+                        ? 'bg-[#FEFCF5] border-t-2 border-x-2 border-[#DCCFB4] text-[#C75A51] -mb-[2px] z-10 rounded-t-[14px_18px_0_0]'
+                        : 'bg-[#EDE5D2]/60 text-[#85796B] hover:bg-[#F5EFE0]'
                     }`}
                   >
                     <span>📅</span>
@@ -1442,23 +2238,23 @@ export default function App() {
                 
                 <button 
                   onClick={addNewDay}
-                  className="px-3.5 py-3 text-xs font-bold text-[#3B6C57] hover:bg-green-50 rounded-t-xl transition-all"
+                  className="px-3.5 py-3 text-xs font-bold text-[#3B6C57] hover:bg-green-50 rounded-t-xl transition-all flex-shrink-0 whitespace-nowrap"
                 >
                   + 新增天數
                 </button>
               </div>
 
               {/* 該天日程詳細資訊與卡片 */}
-              <div className="bg-white border-2 border-[#EADEC6] rounded-2xl p-6 shadow-xs">
+              <div className="washi-card p-6 shadow-xs">
                 
                 {/* 該日的主題 Banner */}
                 <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 border-b border-dashed border-[#EADEC6] pb-6 mb-6">
                   <div className="space-y-2 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[10px] font-black bg-[#FAF6F0] border border-[#EADEC6] px-2.5 py-0.5 rounded-full text-[#8C7D73]">
+                    <div className="flex overflow-x-auto flex-nowrap items-center gap-2 scrollbar-none">
+                      <span className="text-[10px] font-black bg-[#FAF6F0] border border-[#EADEC6] px-2.5 py-0.5 rounded-full text-[#8C7D73] flex-shrink-0 whitespace-nowrap">
                         📍 行程動線：{currentDayData.path || "無指定"}
                       </span>
-                      <span className="text-[10px] font-black bg-blue-50 border border-blue-100 px-2.5 py-0.5 rounded-full text-blue-700">
+                      <span className="text-[10px] font-black bg-blue-50 border border-blue-100 px-2.5 py-0.5 rounded-full text-blue-700 flex-shrink-0 whitespace-nowrap">
                         👥 旅伴：{currentDayData.companion || "單人獨旅"}
                       </span>
                     </div>
@@ -1475,9 +2271,21 @@ export default function App() {
                     </h3>
                   </div>
 
-                  <div className="text-right">
+                  <div className="text-right space-y-1.5">
                     <div className="text-sm font-black text-[#3B6C57] bg-[#F1F6F3] border border-[#D5E6DF] px-4 py-2 rounded-xl shadow-xs inline-flex items-center gap-1.5">
                       💴 當日預估：¥{getDailyTotalCost(currentDayData).toLocaleString()}
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {getDailyTransitMinutes(currentDayData) > 0 && (
+                        <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-lg inline-flex items-center gap-1">
+                          🚃 當天交通總預估：約 {formatMinutes(getDailyTransitMinutes(currentDayData))}
+                        </span>
+                      )}
+                      {getLodgingForDay(activeDay) && (
+                        <span className="text-[10px] font-black text-[#593E30] bg-[#FAF6F0] border border-[#EADEC6] px-2.5 py-1 rounded-lg inline-flex items-center gap-1">
+                          🏨 今晚住宿：{getLodgingForDay(activeDay).name}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1495,11 +2303,11 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* 中間：垂直線與裝飾圓點 */}
+                        {/* 中間：水墨虛線與墨點 */}
                         <div className="relative flex flex-col items-center">
-                          <div className="h-full w-px bg-[#EADEC6] absolute top-0 bottom-0 z-0 group-last:h-4"></div>
-                          <div className="w-4.5 h-4.5 rounded-full bg-white border-2 border-[#C75A51] z-10 mt-4.5 flex items-center justify-center shadow-xs">
-                            <div className="w-2 h-2 rounded-full bg-[#C75A51]"></div>
+                          <div className="h-full w-0 border-l-2 border-dashed border-[#C9BBA0] absolute top-0 bottom-0 z-0 group-last:h-4"></div>
+                          <div className="w-4.5 h-4.5 ink-dot bg-[#FEFCF5] border-2 border-[#C75A51] z-10 mt-4.5 flex items-center justify-center shadow-xs">
+                            <div className="w-2 h-2 ink-dot bg-[#C75A51]"></div>
                           </div>
                         </div>
 
@@ -1517,12 +2325,12 @@ export default function App() {
                             </button>
 
                             {/* 標籤徽章與預算 */}
-                            <div className="flex flex-wrap items-center gap-2 mb-2 pr-10">
-                              <span className="text-[10px] font-black px-2.5 py-0.5 rounded-md bg-[#F2ECE1] text-[#593E30]">
+                            <div className="flex overflow-x-auto flex-nowrap items-center gap-2 mb-2 pr-10 scrollbar-none">
+                              <span className="text-[10px] font-black px-2.5 py-0.5 rounded-md bg-[#F2ECE1] text-[#593E30] flex-shrink-0 whitespace-nowrap">
                                 {spot.tagName || "✨ 自訂"}
                               </span>
                               {spot.cost > 0 && (
-                                <span className="text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-0.5 rounded-md">
+                                <span className="text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-0.5 rounded-md flex-shrink-0 whitespace-nowrap">
                                   💴 ¥{Number(spot.cost).toLocaleString()}
                                 </span>
                               )}
@@ -1531,7 +2339,7 @@ export default function App() {
                                   href={spot.mapUrl} 
                                   target="_blank" 
                                   rel="noreferrer" 
-                                  className="inline-flex items-center gap-1 text-[10px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2.5 py-0.5 rounded-md transition-all"
+                                  className="inline-flex items-center gap-1 text-[10px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2.5 py-0.5 rounded-md transition-all flex-shrink-0 whitespace-nowrap"
                                 >
                                   <MapPin size={10} /> 導航
                                 </a>
@@ -1560,6 +2368,24 @@ export default function App() {
                               </div>
                             )}
                           </div>
+
+                          {/* 前往下一站的交通建議與預估時間 */}
+                          {spotIdx < currentDayData.spots.length - 1 && (
+                            <div className="mt-3 ml-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 border border-blue-100 text-blue-700 rounded-lg">
+                                {getTransitMode(spot).label} • 約 {formatMinutes(getTransitMinutes(spot))}
+                              </span>
+                              <a
+                                href={getDirectionsUrl(spot.name, currentDayData.spots[spotIdx + 1].name, spot.transitMode && spot.transitMode !== 'default' ? spot.transitMode : transportPref)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-[#EADEC6] text-[#593E30] rounded-lg hover:border-[#C75A51] hover:text-[#C75A51] transition-all"
+                              >
+                                🗺️ 查即時路線
+                              </a>
+                              <span className="text-[#8C7D73]">➔ 下一站：{currentDayData.spots[spotIdx + 1].name}</span>
+                            </div>
+                          )}
                         </div>
 
                       </div>
@@ -1595,7 +2421,7 @@ export default function App() {
           ========================================== */}
       {isModalOpen && editData && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
-          <div className="bg-[#FCFBF8] border-2 border-[#EADEC6] rounded-2xl w-full max-w-md p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
+          <div className="washi-card w-full max-w-md p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
             
             {/* 關閉按鈕 */}
             <button 
@@ -1709,13 +2535,40 @@ export default function App() {
 
               <div>
                 <label className="block mb-1 text-[11px]">📌 個人專屬備忘錄 (Memo)</label>
-                <input 
-                  type="text" 
-                  value={editData.data.memo} 
-                  onChange={e => setEditData({...editData, data: {...editData.data, memo: e.target.value}})} 
-                  className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-[#2C2421] focus:outline-none focus:border-[#C75A51]" 
-                  placeholder="例: 幫媽媽帶兩罐 SHIRO 的香水！" 
+                <input
+                  type="text"
+                  value={editData.data.memo}
+                  onChange={e => setEditData({...editData, data: {...editData.data, memo: e.target.value}})}
+                  className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-[#2C2421] focus:outline-none focus:border-[#C75A51]"
+                  placeholder="例: 幫媽媽帶兩罐 SHIRO 的香水！"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block mb-1 text-[11px]">🚃 前往下一站交通方式</label>
+                  <select
+                    value={editData.data.transitMode || 'default'}
+                    onChange={e => setEditData({...editData, data: {...editData.data, transitMode: e.target.value}})}
+                    className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-[#2C2421] focus:outline-none focus:border-[#C75A51]"
+                  >
+                    <option value="default">依整體偏好交通</option>
+                    {TRANSPORT_MODES.map(m => (
+                      <option key={m.key} value={m.key}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block mb-1 text-[11px]">⏳ 預估交通時間 (分鐘)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editData.data.transitMin ?? ''}
+                    onChange={e => setEditData({...editData, data: {...editData.data, transitMin: e.target.value}})}
+                    className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-[#2C2421] focus:outline-none focus:border-[#C75A51]"
+                    placeholder="留空自動推估"
+                  />
+                </div>
               </div>
 
               <div className="flex gap-2 pt-3 border-t border-[#EADEC6]">
@@ -1738,7 +2591,7 @@ export default function App() {
                   </button>
                   <button 
                     type="submit" 
-                    className="px-5 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl transition-all"
+                    className="px-5 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl transition-all"
                   >
                     儲存更新
                   </button>
@@ -1755,7 +2608,7 @@ export default function App() {
           ========================================== */}
       {isDayModalOpen && editDayData && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
-          <div className="bg-[#FCFBF8] border-2 border-[#EADEC6] rounded-2xl w-full max-w-sm p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
+          <div className="washi-card w-full max-w-sm p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
             
             <button 
               onClick={() => setIsDayModalOpen(false)} 
@@ -1812,7 +2665,7 @@ export default function App() {
                 </button>
                 <button 
                   type="submit" 
-                  className="px-5 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl transition-all"
+                  className="px-5 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl transition-all"
                 >
                   儲存修改
                 </button>
@@ -1827,7 +2680,7 @@ export default function App() {
           ========================================== */}
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
-          <div className="bg-[#FCFBF8] border-2 border-[#EADEC6] rounded-2xl w-full max-w-sm p-6 shadow-2xl relative transition-all">
+          <div className="washi-card w-full max-w-sm p-6 shadow-2xl relative transition-all">
             
             <button 
               onClick={() => setIsSettingsOpen(false)} 
@@ -1840,9 +2693,37 @@ export default function App() {
               <span>🔑</span> 串接 Gemini 2.5 API 金鑰
             </h3>
 
-            <p className="text-xs text-[#8C7D73] leading-relaxed mb-4">
+            <p className="text-xs text-[#8C7D73] leading-relaxed mb-3">
               填入您個人的 Google Gemini API Key。填入後，AI 柴犬助理「小柴」將能直接調用真實 AI 模型，即時依照您的想法，重新智能調整和生成精準的日本旅行地圖與花費！
             </p>
+
+            {/* 調用模型說明 */}
+            <div className="flex items-center justify-between gap-2 mb-3 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2">
+              <span className="text-[10px] font-bold text-[#8C7D73]">🤖 調用模型</span>
+              <code className="text-[10px] font-black text-[#3B6C57] bg-[#F1F6F3] border border-[#D5E6DF] px-2 py-0.5 rounded">gemini-2.5-flash</code>
+            </div>
+
+            {/* AI Studio 申請說明 */}
+            <div className="bg-[#FAF8F5] border border-[#EADEC6] rounded-lg p-3 space-y-1.5 mb-4">
+              <p className="text-[10px] font-black text-[#593E30]">🔑 還沒有金鑰？免費申請步驟：</p>
+              <ol className="text-[10px] text-[#6D5D55] leading-relaxed space-y-1 list-decimal list-inside font-semibold">
+                <li>用 Google 帳號登入 <strong>Google AI Studio</strong>。</li>
+                <li>點擊「<strong>Create API key</strong>」建立金鑰。</li>
+                <li>複製 <code className="bg-white border border-[#EADEC6] px-1 rounded">AIzaSy...</code> 開頭的金鑰，貼回下方欄位。</li>
+                <li>免費額度即可使用本站全部 AI 功能（對話排程、機票／住宿截圖辨識）。</li>
+              </ol>
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="block w-full mt-1 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-lg text-[11px] font-black text-center transition-all"
+              >
+                🔗 前往 Google AI Studio 申請金鑰
+              </a>
+              <p className="text-[9px] text-[#8C7D73] leading-relaxed pt-0.5">
+                🔒 金鑰只儲存在您自己的瀏覽器（LocalStorage），不會上傳到任何伺服器汪！
+              </p>
+            </div>
 
             <div className="space-y-4">
               <div>
@@ -1886,7 +2767,7 @@ export default function App() {
           ========================================== */}
       {isTicketModalOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
-          <div className="bg-[#FCFBF8] border-2 border-[#EADEC6] rounded-2xl w-full max-w-md p-6 shadow-2xl relative transition-all">
+          <div className="washi-card w-full max-w-md p-6 shadow-2xl relative transition-all">
             
             <button 
               onClick={() => setIsTicketModalOpen(false)} 
@@ -1900,37 +2781,57 @@ export default function App() {
             </h3>
 
             <p className="text-xs text-[#8C7D73] leading-relaxed mb-4 font-semibold">
-              您可以直接把整段電子機票通知信、行程明細等文字貼在下方。小柴會自動幫您抽取出發的日期與時間汪！
+              您可以直接把整段電子機票通知信、行程明細等文字貼在下方，或上傳機票截圖。小柴會自動幫您抽取「去程」與「回程」的日期與時間汪！
             </p>
 
             <div className="space-y-4">
               <div>
-                <textarea 
-                  value={ticketInputText} 
-                  onChange={e => setTicketInputText(e.target.value)} 
-                  className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421] font-semibold" 
+                <textarea
+                  value={ticketInputText}
+                  onChange={e => setTicketInputText(e.target.value)}
+                  className="w-full bg-[#FAF8F5] border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421] font-semibold"
                   rows={6}
                   placeholder="例：
 訂單編號: ABC1234
-航班: BR198 Taipei (TPE) -> Tokyo (NRT)
-出發時間: 2026/07/15 08:30"
+去程: BR198 Taipei (TPE) -> Tokyo (NRT) 2026/07/15 08:30
+回程: BR197 Tokyo (NRT) -> Taipei (TPE) 2026/07/20 17:45"
                 />
               </div>
 
+              {/* 截圖辨識上傳區 */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] text-[#8C7D73] font-bold block">📸 或上傳機票截圖進行 AI 辨識{!apiKey && <span className="text-[#C75A51]">（需先設定 Gemini API Key）</span>}：</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={e => handleTicketImageSelect(e.target.files && e.target.files[0])}
+                  className="w-full text-[10px] text-[#8C7D73] file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-[#593E30] file:text-white file:text-[10px] file:font-bold file:cursor-pointer bg-[#FAF8F5] border border-[#EADEC6] rounded-lg p-1.5"
+                />
+                {ticketImage && (
+                  <div className="flex items-center justify-between gap-2 text-[10px] font-bold text-[#3B6C57] bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">
+                    <span className="truncate">✅ 已載入截圖：{ticketImage.name}</span>
+                    <button onClick={() => setTicketImage(null)} className="text-red-400 hover:text-red-600 flex-shrink-0">
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="flex justify-end gap-2 pt-3 border-t border-[#EADEC6]">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setIsTicketModalOpen(false)}
                   className="px-4 py-2 border border-[#EADEC6] rounded-xl text-xs font-bold text-[#593E30] hover:bg-[#F3EFE9] transition-all"
                 >
                   取消
                 </button>
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={handleParseTicket}
-                  className="px-5 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all"
+                  disabled={isAiLoading}
+                  className="px-5 py-2 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50"
                 >
-                  開始解析
+                  {isAiLoading ? '辨識中...' : '開始解析'}
                 </button>
               </div>
             </div>
@@ -1943,7 +2844,7 @@ export default function App() {
           ========================================== */}
       {isSyncModalOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
-          <div className="bg-[#FCFBF8] border-2 border-[#EADEC6] rounded-2xl w-full max-w-md p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
+          <div className="washi-card w-full max-w-md p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95">
             
             <button 
               onClick={() => setIsSyncModalOpen(false)} 
@@ -2009,7 +2910,7 @@ export default function App() {
                 <button
                   onClick={saveToCloud}
                   disabled={isCloudLoading}
-                  className="flex-1 py-2.5 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  className="flex-1 py-2.5 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
                   {isCloudLoading ? '同步中...' : '☁️ 備份行程至雲端'}
                 </button>
@@ -2042,13 +2943,18 @@ export default function App() {
         </div>
       )}
 
-      {/* 精美和風味頁腳 */}
-      <footer className="border-t-2 border-[#EADEC6] bg-white mt-12 py-8 text-center text-xs text-[#8C7D73] font-bold space-y-2">
+      {/* 水墨和紙頁腳：毛筆分隔線 + 朱印落款 */}
+      <footer className="mt-12 py-10 text-center text-xs text-[#85796B] font-bold space-y-3 relative">
+        {/* 毛筆橫劃分隔線 */}
+        <svg viewBox="0 0 400 10" preserveAspectRatio="none" className="w-56 h-2.5 mx-auto opacity-40">
+          <path d="M6 6 C 90 2, 180 9, 260 5 S 380 4, 394 6" fill="none" stroke="#3D362E" strokeWidth="4" strokeLinecap="round" />
+        </svg>
         <div className="flex justify-center items-center gap-2">
-          <span>🐕</span>
+          <ShibaInk className="w-6 h-6 float-soft" />
           <span>OriTour 和風日本旅行助理平台 • 祝您旅途平安愉悅！</span>
+          <span className="inline-flex items-center justify-center w-6 h-6 bg-[#C75A51] text-[#FBF4E6] text-[10px] rounded-md rotate-3 shadow-sm">柴</span>
         </div>
-        <p className="text-[10px] font-medium text-[#BFB8B2]">© 2026 OriTour Studio. 本系統資料會即時同步暫存於您的個人瀏覽器中。</p>
+        <p className="text-[10px] font-medium text-[#B3A99A]">© 2026 OriTour Studio. 本系統資料會即時同步暫存於您的個人瀏覽器中，離線亦可使用。</p>
       </footer>
 
     </div>

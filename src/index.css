@@ -1,3 +1,171 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ==========================================================
+   「墨と柴」設計系統 — 可愛柴犬 × 水墨溫潤和紙
+   ========================================================== */
+
+:root {
+  --washi: #F6F0E2;          /* 和紙底色 */
+  --washi-card: #FEFCF5;     /* 卡片紙色 */
+  --sumi: #33302B;           /* 墨色（主文字） */
+  --sumi-soft: #4D4137;      /* 墨茶（標題） */
+  --shu: #C75A51;            /* 朱色（印章紅） */
+  --matcha: #3B6C57;         /* 抹茶綠 */
+  --kin: #DCCFB4;            /* 金茶（框線） */
+}
+
+/* --- 宣紙質感背景：紙白 + 淡墨暈染 --- */
+body {
+  background-color: #F6F3EA; /* 宣紙白 */
+  background-image:
+    /* 淡墨暈染（左上）、抹茶暈染（右下）、朱暈（右上一點點） */
+    radial-gradient(ellipse 55% 40% at 8% 4%, rgba(61, 54, 46, 0.045), transparent 70%),
+    radial-gradient(ellipse 45% 35% at 96% 90%, rgba(59, 108, 87, 0.04), transparent 70%),
+    radial-gradient(ellipse 30% 22% at 88% 6%, rgba(199, 90, 81, 0.035), transparent 70%);
+  background-attachment: fixed;
+}
+
+/* 宣紙紋理層：細緻紙粒 + 橫向長纖維絲 + 雲狀吸墨暈斑 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    /* 1. 細緻紙粒 */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='7'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.31 0 0 0 0 0.25 0 0 0 0.045 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23p)'/%3E%3C/svg%3E"),
+    /* 2. 橫向拉伸的長纖維絲（宣紙簾紋） */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='140'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.32' numOctaves='3' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.36 0 0 0 0 0.28 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='420' height='140' filter='url(%23f)'/%3E%3C/svg%3E"),
+    /* 3. 雲狀吸墨暈斑（大尺度不均勻） */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='560'%3E%3Cfilter id='c'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.0045' numOctaves='3' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 0.38 0 0 0 0 0.34 0 0 0 0 0.26 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='560' height='560' filter='url(%23c)'/%3E%3C/svg%3E");
+}
+
+/* 漂浮的水墨筆觸（背景裝飾，緩慢漂移） */
+body::after {
+  content: "";
+  position: fixed;
+  inset: -6%;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 200'%3E%3Cpath d='M20 150 C 150 40 320 190 580 60' fill='none' stroke='%233D362E' stroke-width='26' stroke-linecap='round' opacity='0.05'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 240'%3E%3Cpath d='M30 60 C 160 200 340 20 470 170' fill='none' stroke='%233B6C57' stroke-width='22' stroke-linecap='round' opacity='0.05'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='34' fill='none' stroke='%233D362E' stroke-width='5' stroke-dasharray='150 64' stroke-linecap='round' opacity='0.045'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: -4% 6%, 104% 88%, 88% 12%;
+  background-size: 44% auto, 40% auto, 130px 130px;
+  animation: ink-drift 46s ease-in-out infinite alternate;
+}
+
+@keyframes ink-drift {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  50%  { transform: translate(1.6%, -1.2%) rotate(0.5deg); }
+  100% { transform: translate(-1.2%, 1.4%) rotate(-0.5deg); }
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* --- 懸浮回頂按鈕 --- */
+.back-to-top {
+  animation: stamp-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+/* ==========================================================
+   元件樣式
+   ========================================================== */
+@layer components {
+
+  /* 和紙卡片：不規則可愛圓角 + 紙紋 + 墨線框 + 柔影 */
+  .washi-card {
+    position: relative;
+    background-color: var(--washi-card);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.35 0 0 0 0 0.27 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23p)'/%3E%3C/svg%3E");
+    border: 2px solid var(--kin);
+    border-radius: 22px 26px 20px 28px;
+    box-shadow:
+      0 1px 0 rgba(77, 65, 55, 0.05),
+      0 14px 28px -18px rgba(77, 65, 55, 0.35);
+  }
+
+  /* 水墨橫幅（總覽 banner 用）：和紙卡 + 淡墨掃過 */
+  .ink-wash {
+    background-image:
+      linear-gradient(115deg, rgba(61, 54, 46, 0.045) 0%, transparent 34%, transparent 68%, rgba(59, 108, 87, 0.05) 100%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.35 0 0 0 0 0.27 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23p)'/%3E%3C/svg%3E");
+  }
+
+  /* 毛筆筆觸底線（標題重點字用） */
+  .brush-underline {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 14' preserveAspectRatio='none'%3E%3Cpath d='M4 9 C 40 4, 80 12, 120 8 S 185 5, 196 8' fill='none' stroke='%23C75A51' stroke-width='6' stroke-linecap='round' opacity='0.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: bottom left;
+    background-size: 100% 0.42em;
+    padding-bottom: 0.18em;
+  }
+
+  /* 朱印章按鈕：按下時像蓋章一樣下沉 */
+  .hanko-btn {
+    box-shadow:
+      inset 0 -2px 0 rgba(0, 0, 0, 0.14),
+      0 3px 8px -2px rgba(199, 90, 81, 0.45);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .hanko-btn:active:not(:disabled) {
+    transform: translateY(1.5px) scale(0.97);
+    box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.18);
+  }
+
+  /* 蓋印進場動畫（Toast 用） */
+  .stamp-in {
+    animation: stamp-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  }
+
+  /* 吉祥物輕飄動畫 */
+  .float-soft {
+    display: inline-block;
+    animation: float-soft 3.6s ease-in-out infinite;
+  }
+
+  /* 時間軸墨點 */
+  .ink-dot {
+    border-radius: 52% 48% 50% 50% / 50% 54% 46% 50%;
+  }
+}
+
+@keyframes stamp-in {
+  0%   { transform: scale(1.7) rotate(-9deg); opacity: 0; }
+  55%  { transform: scale(0.94) rotate(1.5deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50%      { transform: translateY(-9px) rotate(2.5deg); }
+}
+
+/* 自訂捲軸：墨色細桿 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(77, 65, 55, 0.28);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(77, 65, 55, 0.45); }
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .scrollbar-none {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+}
