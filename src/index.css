@@ -136,6 +136,15 @@ body::after {
   .ink-dot {
     border-radius: 52% 48% 50% 50% / 50% 54% 46% 50%;
   }
+
+  /* 手帳貼紙：いらすとや插圖貼在面板角落 */
+  .sticker {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    filter: drop-shadow(1px 3px 4px rgba(77, 65, 55, 0.28));
+    z-index: 5;
+  }
 }
 
 @keyframes stamp-in {
@@ -147,6 +156,22 @@ body::after {
 @keyframes float-soft {
   0%, 100% { transform: translateY(0) rotate(-2deg); }
   50%      { transform: translateY(-9px) rotate(2.5deg); }
+}
+
+/* --- 列印：白底、去紋理、確保分頁生效 --- */
+@media print {
+  body {
+    background: #ffffff !important;
+    background-image: none !important;
+  }
+  body::before,
+  body::after {
+    display: none !important;
+  }
+  .break-after-page {
+    break-after: page;
+    page-break-after: always;
+  }
 }
 
 /* 自訂捲軸：墨色細桿 */

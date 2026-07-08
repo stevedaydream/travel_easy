@@ -1,5 +1,5 @@
 // OriTour PWA Service Worker
-const CACHE_NAME = 'oritour-v2';
+const CACHE_NAME = 'oritour-v3';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',
