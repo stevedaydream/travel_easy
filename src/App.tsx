@@ -256,6 +256,7 @@ const TRANSPORT_MODES = [
 ];
 
 export default function App() {
+  const switchingToProjectIdRef = useRef<string | null>(null);
   const [view, setView] = useState('welcome'); // 'welcome' | 'planner'
   const [itinerary, setItinerary] = useState(() => {
     // 試圖自 LocalStorage 恢復
@@ -292,6 +293,58 @@ export default function App() {
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [syncTab, setSyncTab] = useState<'gdrive' | 'gas'>('gdrive');
   const [showGasHelp, setShowGasHelp] = useState(false);
+
+  // 專案管理與 Onboarding 狀態
+  const [projects, setProjects] = useState<any[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('oritour_projects');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          return [];
+        }
+      }
+    }
+    return [];
+  });
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('oritour_active_project_id') || '';
+    }
+    return '';
+  });
+  const [isProjectsModalOpen, setIsProjectsModalOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectPreset, setNewProjectPreset] = useState<'tokyo' | 'kyoto' | 'osaka' | 'blank'>('tokyo');
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState('');
+
+  // Onboarding 狀態
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(1);
+
+  // 小柴規劃精靈 (Shiba Planning Wizard) 狀態
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardApiKey, setWizardApiKey] = useState('');
+  const [wizardDestination, setWizardDestination] = useState('');
+  const [wizardDepartureTime, setWizardDepartureTime] = useState('');
+  const [wizardReturnTime, setWizardReturnTime] = useState('');
+  const [wizardNumDays, setWizardNumDays] = useState<number>(5);
+  const [wizardFlights, setWizardFlights] = useState<any[]>([
+    { flightNo: '', depAirport: '', arrAirport: '', depTime: '', arrTime: '', segType: 'outbound' }
+  ]);
+  const [wizardLodgings, setWizardLodgings] = useState<any[]>([
+    { name: '', checkIn: '', checkOut: '', mapUrl: '' }
+  ]);
+  const [wizardUseAi, setWizardUseAi] = useState(true);
+  const [wizardAiPrompt, setWizardAiPrompt] = useState('');
+  const [wizardAiStyle, setWizardAiStyle] = useState<'行軍' | '平衡' | '悠閒'>('平衡');
+  const [wizardAiThemes, setWizardAiThemes] = useState<string[]>([]);
+  const [wizardError, setWizardError] = useState('');
+
 
   // Google Drive 與 QR Code 設定
   const [googleClientId, setGoogleClientId] = useState(() => {
@@ -505,6 +558,7 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [isSharedView, setIsSharedView] = useState(false);
   const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [pendingDriveId, setPendingDriveId] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem('oritour_gas_url', gasUrl);
@@ -605,6 +659,152 @@ export default function App() {
       document.body.appendChild(script);
     }
   }, []);
+
+  // 專案庫初始與移轉邏輯
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const savedProjects = localStorage.getItem('oritour_projects');
+    let parsedProjects = [];
+    try {
+      if (savedProjects) parsedProjects = JSON.parse(savedProjects);
+    } catch (e) {
+      parsedProjects = [];
+    }
+
+    if (parsedProjects.length === 0) {
+      // 進行資料移轉
+      const currentItineraryStr = localStorage.getItem('oritour_itinerary');
+      const currentItinerary = currentItineraryStr ? JSON.parse(currentItineraryStr) : PRESETS.tokyo;
+      
+      const currentImmigrationQr = JSON.parse(localStorage.getItem('oritour_vjw_immigration_qr') || '{"base64":"","driveLink":"","driveFileId":""}');
+      const currentCustomsQr = JSON.parse(localStorage.getItem('oritour_vjw_customs_qr') || '{"base64":"","driveLink":"","driveFileId":""}');
+      const currentDeparture = localStorage.getItem('oritour_departure_time') || '';
+      const currentReturn = localStorage.getItem('oritour_return_time') || '';
+      const currentFlight = JSON.parse(localStorage.getItem('oritour_flight_info') || '{"departure":"","return":""}');
+      const currentLodgings = JSON.parse(localStorage.getItem('oritour_lodgings') || '[]');
+      const currentDest = localStorage.getItem('oritour_destination') || '東京';
+      const currentTrans = localStorage.getItem('oritour_transport_pref') || 'transit';
+      const currentNotes = localStorage.getItem('oritour_quick_notes') || '';
+      const currentPacking = JSON.parse(localStorage.getItem('oritour_packing_list') || '[]');
+      
+      const defaultId = shareId || 'ori-default';
+      
+      const defaultProject = {
+        id: defaultId,
+        name: '我的第一個行程',
+        updatedAt: new Date().toISOString(),
+        destination: currentDest,
+        departureTime: currentDeparture,
+        returnTime: currentReturn,
+        itinerary: currentItinerary,
+        packingList: currentPacking,
+        quickNotes: currentNotes,
+        lodgings: currentLodgings,
+        transportPref: currentTrans,
+        flightInfo: currentFlight,
+        immigrationQr: currentImmigrationQr,
+        customsQr: currentCustomsQr
+      };
+
+      const newList = [defaultProject];
+      setProjects(newList);
+      setActiveProjectId(defaultId);
+      localStorage.setItem('oritour_projects', JSON.stringify(newList));
+      localStorage.setItem('oritour_active_project_id', defaultId);
+    } else {
+      const savedActiveId = localStorage.getItem('oritour_active_project_id') || '';
+      if (!savedActiveId || !parsedProjects.some((p: any) => p.id === savedActiveId)) {
+        const firstId = parsedProjects[0].id;
+        setActiveProjectId(firstId);
+        localStorage.setItem('oritour_active_project_id', firstId);
+      }
+    }
+
+    // 檢查 Onboarding
+    const onboarded = localStorage.getItem('oritour_onboarded');
+    if (onboarded !== 'true') {
+      setIsOnboardingOpen(true);
+    }
+  }, []);
+
+  // 保持最新的 projects 參考以解決 stale closure 命名覆蓋問題
+  const projectsRef = useRef(projects);
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  // 當任何行程資料變更時，自動更新當前活躍專案，並同步至本機 localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined' || !activeProjectId || projectsRef.current.length === 0) return;
+
+    if (activeProjectId === switchingToProjectIdRef.current) {
+      // 正在切換到此專案，所有 State 即將更新為該專案的值。在此清空標記並返回，避免將未更新完的舊值寫入。
+      switchingToProjectIdRef.current = null;
+      return;
+    }
+
+    if (switchingToProjectIdRef.current !== null) {
+      // 仍在專案切換的中途 render 中，忽略此次同步
+      return;
+    }
+
+    const currentProjects = projectsRef.current;
+    const updatedProjects = currentProjects.map(proj => {
+      if (proj.id === activeProjectId) {
+        return {
+          ...proj,
+          updatedAt: new Date().toISOString(),
+          destination,
+          departureTime,
+          returnTime,
+          itinerary,
+          packingList,
+          quickNotes,
+          lodgings,
+          transportPref,
+          flightInfo,
+          immigrationQr,
+          customsQr
+        };
+      }
+      return proj;
+    });
+
+    const activeProj = currentProjects.find(p => p.id === activeProjectId);
+    if (activeProj) {
+      const isDifferent = 
+        activeProj.destination !== destination ||
+        activeProj.departureTime !== departureTime ||
+        activeProj.returnTime !== returnTime ||
+        JSON.stringify(activeProj.itinerary) !== JSON.stringify(itinerary) ||
+        JSON.stringify(activeProj.packingList) !== JSON.stringify(packingList) ||
+        activeProj.quickNotes !== quickNotes ||
+        JSON.stringify(activeProj.lodgings) !== JSON.stringify(lodgings) ||
+        activeProj.transportPref !== transportPref ||
+        JSON.stringify(activeProj.flightInfo) !== JSON.stringify(flightInfo) ||
+        JSON.stringify(activeProj.immigrationQr) !== JSON.stringify(immigrationQr) ||
+        JSON.stringify(activeProj.customsQr) !== JSON.stringify(customsQr);
+
+      if (isDifferent) {
+        setProjects(updatedProjects);
+        localStorage.setItem('oritour_projects', JSON.stringify(updatedProjects));
+      }
+    }
+  }, [
+    activeProjectId,
+    destination,
+    departureTime,
+    returnTime,
+    itinerary,
+    packingList,
+    quickNotes,
+    lodgings,
+    transportPref,
+    flightInfo,
+    immigrationQr,
+    customsQr
+  ]);
 
   // 定時檢查出發前一天提醒
   useEffect(() => {
@@ -1162,7 +1362,7 @@ export default function App() {
             if (method === 'PATCH') {
               localStorage.removeItem(`oritour_drive_file_id_${shareId}`);
               setIsCloudLoading(false);
-              saveToGoogleDrive();
+              showToast("雲端備份檔案似乎已被刪除，已為您清除舊紀錄，請再次點擊備份按鈕重新建立備份汪！", "warning");
               return;
             }
             const errJson = await uploadResponse.json();
@@ -1289,6 +1489,736 @@ export default function App() {
     showToast("已將行程複製為您個人的專屬備份！現在起您可以獨立修改並備份到雲端，不會影響到原來的範本汪！");
   };
 
+  // --- 專案管理與 Onboarding 輔助函式 ---
+  const switchProject = (targetId: string) => {
+    const targetProj = projects.find(p => p.id === targetId);
+    if (!targetProj) return;
+
+    switchingToProjectIdRef.current = targetId;
+
+    // 載入資料至各個 State
+    setDestination(targetProj.destination || '');
+    setDepartureTime(targetProj.departureTime || '');
+    setReturnTime(targetProj.returnTime || '');
+    setItinerary(targetProj.itinerary || PRESETS.tokyo);
+    setPackingList(targetProj.packingList || []);
+    setQuickNotes(targetProj.quickNotes || '');
+    setLodgings(targetProj.lodgings || []);
+    setTransportPref(targetProj.transportPref || 'transit');
+    setFlightInfo(targetProj.flightInfo || { departure: '', return: '' });
+    setImmigrationQr(targetProj.immigrationQr || { base64: '', driveLink: '', driveFileId: '' });
+    setCustomsQr(targetProj.customsQr || { base64: '', driveLink: '', driveFileId: '' });
+    setShareId(targetProj.id);
+    localStorage.setItem('oritour_share_id', targetProj.id);
+    
+    setActiveProjectId(targetId);
+    localStorage.setItem('oritour_active_project_id', targetId);
+
+    showToast(`已切換至專案「${targetProj.name}」汪！`);
+  };
+
+  const createProject = (name: string, presetKey: 'tokyo' | 'kyoto' | 'osaka' | 'blank') => {
+    const newId = 'ori-' + Math.random().toString(36).substring(2, 9) + '-' + Math.random().toString(36).substring(2, 9);
+    
+    let initItinerary = PRESETS.tokyo;
+    let initDest = '東京';
+    if (presetKey === 'kyoto') {
+      initItinerary = PRESETS.kyoto;
+      initDest = '京都';
+    } else if (presetKey === 'osaka') {
+      initItinerary = PRESETS.tokyo; // Use Tokyo preset template, set destination to Osaka
+      initDest = '大阪';
+    } else if (presetKey === 'blank') {
+      initItinerary = [{ dayNum: 1, title: '自由探索', path: '', companion: '', spots: [] }];
+      initDest = '';
+    }
+
+    const newProject = {
+      id: newId,
+      name: name.trim() || `行程 - ${initDest || '未命名'}`,
+      updatedAt: new Date().toISOString(),
+      destination: initDest,
+      departureTime: '',
+      returnTime: '',
+      itinerary: initItinerary,
+      packingList: [],
+      quickNotes: '',
+      lodgings: [],
+      transportPref: 'transit',
+      flightInfo: { departure: '', return: '' },
+      immigrationQr: { base64: '', driveLink: '', driveFileId: '' },
+      customsQr: { base64: '', driveLink: '', driveFileId: '' }
+    };
+
+    const updatedList = [...projects, newProject];
+    setProjects(updatedList);
+    localStorage.setItem('oritour_projects', JSON.stringify(updatedList));
+    
+    switchProject(newId);
+    showToast(`已成功建立新專案「${newProject.name}」汪！`);
+  };
+
+  const deleteProject = (targetId: string) => {
+    if (projects.length <= 1) {
+      showToast("系統必須保留至少一個專案汪！", "warning");
+      return;
+    }
+    const confirmDelete = window.confirm("確定要刪除此專案嗎？此操作將無法復原汪！");
+    if (!confirmDelete) return;
+
+    const filtered = projects.filter(p => p.id !== targetId);
+    setProjects(filtered);
+    localStorage.setItem('oritour_projects', JSON.stringify(filtered));
+
+    if (activeProjectId === targetId) {
+      switchProject(filtered[0].id);
+    } else {
+      showToast("專案已成功刪除汪！");
+    }
+  };
+
+  const renameProject = (targetId: string, newName: string) => {
+    if (!newName.trim()) return;
+    const updated = projects.map(p => {
+      if (p.id === targetId) {
+        return { ...p, name: newName, updatedAt: new Date().toISOString() };
+      }
+      return p;
+    });
+    setProjects(updated);
+    localStorage.setItem('oritour_projects', JSON.stringify(updated));
+    showToast("專案名稱修改成功！");
+  };
+
+  const exportAllProjects = () => {
+    const dataStr = JSON.stringify(projects, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `oritour_projects_backup_${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast("所有專案已匯出成功！");
+  };
+
+  const importProjects = (file: File) => {
+    const reader = new FileReader();
+    reader.readAsText(file);
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        if (Array.isArray(imported) && imported.length > 0 && imported[0].id) {
+          const confirmImport = window.confirm(`偵測到 ${imported.length} 個行程專案，是否匯入並覆蓋目前的行程庫？`);
+          if (confirmImport) {
+             setProjects(imported);
+             localStorage.setItem('oritour_projects', JSON.stringify(imported));
+             switchProject(imported[0].id);
+             showToast("成功自檔案匯入行程庫！");
+          }
+        } else {
+          throw new Error("無效的專案檔案格式");
+        }
+      } catch (err: any) {
+        showToast("檔案載入失敗，請確認是否為 OriTour 專案備份檔汪！", "warning");
+      }
+    };
+  };
+
+  // --- 備份整個專案庫到 Google Drive ---
+  const saveLibraryToGoogleDrive = async () => {
+    const clientId = googleClientId || DEFAULT_GOOGLE_CLIENT_ID;
+    const isPlaceholder = !clientId || clientId.includes("YOUR_DEFAULT_GOOGLE_CLIENT_ID");
+
+    if (isPlaceholder) {
+      showToast("系統未設定預設的 Google Client ID，請在「系統設定」➔「進階設定」中填寫汪！", "warning");
+      setIsSettingsOpen(true);
+      setShowAdvancedSettings(true);
+      return;
+    }
+
+    setIsCloudLoading(true);
+
+    try {
+      if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+        throw new Error("Google Identity SDK 尚未加載完成，請稍候重試汪！");
+      }
+
+      const google = (window as any).google;
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/drive.file',
+        callback: async (tokenResponse) => {
+          if (tokenResponse.error !== undefined) {
+            console.error("OAuth 錯誤：", tokenResponse.error);
+            showToast("Google 授權失敗汪！", "warning");
+            setIsCloudLoading(false);
+            return;
+          }
+          
+          const accessToken = tokenResponse.access_token;
+          
+          // 搜尋 Google Drive 上是否已有備份檔案
+          const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='OriTour_Library_Backup.json'+and+trashed=false&fields=files(id)`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const searchData = await searchRes.json();
+          const existingFile = searchData.files?.[0];
+          const savedFileId = existingFile?.id || '';
+
+          const metadata = {
+            name: 'OriTour_Library_Backup.json',
+            mimeType: 'application/json',
+          };
+          
+          const form = new FormData();
+          form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+          form.append('file', new Blob([JSON.stringify(projects)], { type: 'application/json' }));
+          
+          let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id';
+          let method = 'POST';
+          
+          if (savedFileId) {
+            url = `https://www.googleapis.com/upload/drive/v3/files/${savedFileId}?uploadType=multipart&fields=id`;
+            method = 'PATCH';
+          }
+          
+          const uploadResponse = await fetch(url, {
+            method: method,
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+            },
+            body: form
+          });
+          
+          if (!uploadResponse.ok) {
+            const errJson = await uploadResponse.json();
+            throw new Error(errJson.error?.message || "備份行程庫失敗");
+          }
+          
+          showToast("所有行程專案已成功備份至您的 Google Drive 汪！");
+          setIsCloudLoading(false);
+        },
+      });
+      
+      client.requestAccessToken({ prompt: 'consent' });
+    } catch (err) {
+      console.error(err);
+      showToast(`備份失敗：${err.message}`, "warning");
+      setIsCloudLoading(false);
+    }
+  };
+
+  // --- 從 Google Drive 還原整個專案庫 ---
+  const loadLibraryFromGoogleDrive = async () => {
+    const clientId = googleClientId || DEFAULT_GOOGLE_CLIENT_ID;
+    const isPlaceholder = !clientId || clientId.includes("YOUR_DEFAULT_GOOGLE_CLIENT_ID");
+
+    if (isPlaceholder) {
+      showToast("系統未設定預設的 Google Client ID，請在「系統設定」➔「進階設定」中填寫汪！", "warning");
+      setIsSettingsOpen(true);
+      setShowAdvancedSettings(true);
+      return;
+    }
+
+    setIsCloudLoading(true);
+
+    try {
+      if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+        throw new Error("Google Identity SDK 尚未加載完成，請稍候重試汪！");
+      }
+
+      const google = (window as any).google;
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/drive.file',
+        callback: async (tokenResponse) => {
+          if (tokenResponse.error !== undefined) {
+            console.error("OAuth 錯誤：", tokenResponse.error);
+            showToast("Google 授權失敗汪！", "warning");
+            setIsCloudLoading(false);
+            return;
+          }
+          
+          const accessToken = tokenResponse.access_token;
+          
+          // 搜尋備份檔案
+          const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='OriTour_Library_Backup.json'+and+trashed=false&fields=files(id)`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const searchData = await searchRes.json();
+          const existingFile = searchData.files?.[0];
+          
+          if (!existingFile) {
+            showToast("在您的雲端硬碟中找不到 OriTour_Library_Backup.json 備份檔案汪！", "warning");
+            setIsCloudLoading(false);
+            return;
+          }
+
+          const fileId = existingFile.id;
+          const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`
+            }
+          });
+          
+          if (!response.ok) throw new Error("讀取雲端備份失敗");
+          const imported = await response.json();
+          
+          if (Array.isArray(imported) && imported.length > 0 && imported[0].id) {
+            const confirmImport = window.confirm(`偵測到雲端有 ${imported.length} 個行程專案，是否匯入並覆蓋目前的行程庫？`);
+            if (confirmImport) {
+              setProjects(imported);
+              localStorage.setItem('oritour_projects', JSON.stringify(imported));
+              
+              // 取得活躍專案，若不存在則取第一個
+              const activeId = localStorage.getItem('oritour_active_project_id') || imported[0].id;
+              const exists = imported.some((p: any) => p.id === activeId);
+              switchProject(exists ? activeId : imported[0].id);
+              showToast("成功從 Google Drive 匯入並還原行程庫！");
+            }
+          } else {
+            throw new Error("備份檔案格式無效");
+          }
+          setIsCloudLoading(false);
+        }
+      });
+      
+      client.requestAccessToken({ prompt: 'consent' });
+    } catch (err) {
+      console.error(err);
+      showToast(`還原失敗：${err.message}`, "warning");
+      setIsCloudLoading(false);
+    }
+  };
+
+  const finishOnboarding = () => {
+    localStorage.setItem('oritour_onboarded', 'true');
+    setIsOnboardingOpen(false);
+    showToast("歡迎開始使用 OriTour！祝你有個美好的旅程汪！");
+  };
+
+  // 規劃精靈開啟時，預填 API Key 並清除上次的錯誤狀態
+  useEffect(() => {
+    if (isWizardOpen) {
+      setWizardApiKey(apiKey);
+      setWizardError('');
+    }
+  }, [isWizardOpen, apiKey]);
+
+  // --- 規劃精靈雙向日期計算 ---
+  const handleWizardDepartureChange = (val: string) => {
+    setWizardDepartureTime(val);
+    if (!val) return;
+    // 已選回程日且區間有效時，以使用者選的日期為準回推天數，不覆蓋回程日
+    if (wizardReturnTime) {
+      const diffTime = new Date(wizardReturnTime).getTime() - new Date(val).getTime();
+      const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      if (days > 0) {
+        setWizardNumDays(days);
+        return;
+      }
+    }
+    if (wizardNumDays > 0) {
+      const depDate = new Date(val);
+      const retDate = new Date(depDate.getTime() + (wizardNumDays - 1) * 24 * 60 * 60 * 1000);
+      setWizardReturnTime(retDate.toISOString().split('T')[0]);
+    }
+  };
+
+  const handleWizardReturnChange = (val: string) => {
+    setWizardReturnTime(val);
+    if (!val || !wizardDepartureTime) return;
+    const depDate = new Date(wizardDepartureTime);
+    const retDate = new Date(val);
+    const diffTime = retDate.getTime() - depDate.getTime();
+    const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    setWizardNumDays(days > 0 ? days : 1);
+  };
+
+  const handleWizardDaysChange = (val: number) => {
+    setWizardNumDays(val);
+    if (val <= 0 || !wizardDepartureTime) return;
+    const depDate = new Date(wizardDepartureTime);
+    const retDate = new Date(depDate.getTime() + (val - 1) * 24 * 60 * 60 * 1000);
+    setWizardReturnTime(retDate.toISOString().split('T')[0]);
+  };
+
+  // --- 小柴規劃精靈 AI 行程生成與專案啟動 ---
+  const buildBlankWizardItinerary = (days: number) =>
+    Array.from({ length: days }, (_, i) => ({
+      dayNum: i + 1,
+      title: `探索日本 Day ${i + 1}`,
+      path: '自由行程',
+      companion: '',
+      spots: []
+    }));
+
+  // 正規化 AI 回傳的行程：補齊缺漏欄位與天數，避免缺 spots 等欄位造成畫面崩潰
+  const normalizeAiItinerary = (parsed: any, days: number) => {
+    const validTagTypes = ['sightseeing', 'shopping', 'food', 'hotel', 'transport', 'custom'];
+    const cleaned = (Array.isArray(parsed) ? parsed : []).slice(0, days).map((day: any, i: number) => ({
+      dayNum: i + 1,
+      title: typeof day?.title === 'string' && day.title ? day.title : `探索日本 Day ${i + 1}`,
+      path: typeof day?.path === 'string' ? day.path : '',
+      companion: typeof day?.companion === 'string' ? day.companion : '',
+      spots: (Array.isArray(day?.spots) ? day.spots : [])
+        .filter((spot: any) => spot && (spot.name || spot.desc))
+        .map((spot: any) => ({
+          time: /^\d{1,2}:\d{2}$/.test(spot?.time) ? spot.time : '09:00',
+          name: String(spot?.name || '未命名景點'),
+          desc: String(spot?.desc || ''),
+          tip: String(spot?.tip || ''),
+          tagType: validTagTypes.includes(spot?.tagType) ? spot.tagType : 'custom',
+          tagName: String(spot?.tagName || '📍 景點'),
+          cost: Number(spot?.cost) || 0,
+          mapUrl: typeof spot?.mapUrl === 'string' && spot.mapUrl.startsWith('http')
+            ? spot.mapUrl
+            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(spot?.name || ''))}`,
+          memo: String(spot?.memo || ''),
+          transitMode: spot?.transitMode || 'default',
+          transitMin: Number(spot?.transitMin) || 0
+        }))
+        .sort((a: any, b: any) => a.time.localeCompare(b.time))
+    }));
+    while (cleaned.length < days) {
+      cleaned.push({
+        dayNum: cleaned.length + 1,
+        title: `探索日本 Day ${cleaned.length + 1}`,
+        path: '自由行程',
+        companion: '',
+        spots: []
+      });
+    }
+    return cleaned;
+  };
+
+  const handleWizardSubmit = async (forceBlank = false) => {
+    const activeKey = wizardApiKey.trim() || apiKey.trim();
+    if (activeKey) {
+      setApiKey(activeKey);
+      localStorage.setItem('oritour_gemini_key', activeKey);
+    }
+
+    setWizardError('');
+    let finalItinerary = [];
+    const actualDays = wizardNumDays > 0 ? wizardNumDays : 5;
+
+    // 如果使用者要用 AI 預排，且有 API 金鑰
+    if (!forceBlank && wizardUseAi && activeKey) {
+      setIsCloudLoading(true);
+      try {
+        const styleGuide = {
+          '行軍': '每天安排 5~7 個行程點，把時間填滿、不浪費',
+          '平衡': '每天安排 4~5 個行程點，有鬆有緊',
+          '悠閒': '每天安排 2~3 個行程點，步調慢活、留白充足'
+        }[wizardAiStyle] || '每天安排 4~5 個行程點';
+
+        const segTypeLabels: Record<string, string> = { outbound: '去程', middle: '中途轉機', return: '回程' };
+        const flightLines = wizardFlights
+          .filter(f => f.flightNo)
+          .map((f, idx) => `航段 ${idx + 1}【${segTypeLabels[f.segType] || '未標記'}】: ${f.flightNo}｜${f.depAirport || '?'} ${f.depTime || '時間未知'} 起飛 ➔ ${f.arrAirport || '?'} ${f.arrTime || '時間未知'} 降落`)
+          .join('\n') || '無';
+
+        const lodgingLines = wizardLodgings
+          .filter(l => l.name)
+          .map((l, idx) => `飯店 ${idx + 1}: ${l.name}（${l.checkIn || '?'} 入住 ~ ${l.checkOut || '?'} 退房）`)
+          .join('\n') || '無';
+
+        const prompt = `您是一位專業的日本旅遊規劃導遊「小柴導遊」，口吻溫暖親切，說話常帶「汪！」。
+請為我規劃一次前往日本【${wizardDestination || '熱門地區'}】的旅行，共 ${actualDays} 天。
+
+【行程基本資訊】
+- 出發日期：${wizardDepartureTime || '未設定'}
+- 回程日期：${wizardReturnTime || '未設定'}
+- 航班資訊（含起降時間，請務必配合安排）：
+${flightLines}
+- 住宿飯店：
+${lodgingLines}
+
+【旅行風格與偏好】
+- 旅行節奏：${styleGuide}
+- 偏好主題：${wizardAiThemes.join(', ') || '無特別指定'}
+- 旅客特別提及想去的地點或要求：${wizardAiPrompt || '無'}
+
+【規劃規則】
+1. 第一天請從抵達航班「降落之後」才開始安排，並包含機場前往市區／飯店寄放行李的交通行程點。
+2. 最後一天行程須在回程航班起飛前約 3 小時結束，並安排前往機場的交通行程點。
+3. 每日動線請圍繞當晚住宿飯店所在區域安排，減少來回奔波。
+4. "tagType" 只能是以下其中之一：sightseeing（觀光）、shopping（購物）、food（美食）、hotel（住宿）、transport（交通）、custom（其他）。
+5. "time" 一律為 24 小時制 HH:mm；"cost" 為該行程點的預估日圓花費（數字）；"transitMin" 為前往下一站的預估交通分鐘數（數字）。
+6. "tagName" 為 emoji 加上 2~4 字的分類短語，例如 "🌸 觀光祈福"。
+
+請回傳這 ${actualDays} 天的完整行程表，格式必須是 JSON 陣列，每個元素代表一天，結構完全如下：
+[
+  {
+    "dayNum": 1,
+    "title": "天數標題（例如：抵達東京與經典鐵塔夜景）",
+    "path": "行程路線概述（例如：成田機場 ➔ 上野 ➔ 東京鐵塔）",
+    "companion": "",
+    "spots": [
+      {
+        "time": "HH:mm",
+        "name": "景點或活動名稱",
+        "desc": "景點介紹與活動內容說明",
+        "tip": "小柴貼心提醒（一句話，口吻帶汪）",
+        "tagType": "sightseeing",
+        "tagName": "🗼 東京鐵塔",
+        "cost": 1500,
+        "mapUrl": "https://www.google.com/maps/search/?api=1&query=東京鐵塔",
+        "memo": "",
+        "transitMode": "default",
+        "transitMin": 30
+      }
+    ]
+  }
+]`;
+
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(response.status === 400 || response.status === 403
+            ? "API Key 無效或權限不足，請回步驟 1 確認金鑰汪！"
+            : `API 呼叫失敗（${response.status}），請稍後再試汪！`);
+        }
+        const resData = await response.json();
+        const text = resData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        let cleanText = text.trim();
+        if (cleanText.startsWith("```json")) {
+          cleanText = cleanText.substring(7);
+        } else if (cleanText.startsWith("```")) {
+          cleanText = cleanText.substring(3);
+        }
+        if (cleanText.endsWith("```")) {
+          cleanText = cleanText.substring(0, cleanText.length - 3);
+        }
+        cleanText = cleanText.trim();
+
+        let parsed;
+        try {
+          parsed = JSON.parse(cleanText);
+        } catch {
+          // 後援：擷取第一個 [ 到最後一個 ] 之間的內容再解析一次
+          const start = cleanText.indexOf('[');
+          const end = cleanText.lastIndexOf(']');
+          if (start === -1 || end <= start) throw new Error("小柴看不懂 AI 回傳的行程格式，請再試一次汪！");
+          parsed = JSON.parse(cleanText.substring(start, end + 1));
+        }
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error("AI 回傳的行程是空的，請再試一次汪！");
+        }
+        finalItinerary = normalizeAiItinerary(parsed, actualDays);
+      } catch (err: any) {
+        console.error("小柴精靈規劃失敗：", err);
+        setIsCloudLoading(false);
+        setWizardError(err?.message || "小柴 AI 規劃發生未知問題，請再試一次汪！");
+        showToast("小柴 AI 規劃失敗了，可以再試一次或改建立空白行程汪！", "warning");
+        return; // 保留精靈視窗與已填資料，讓使用者重試
+      }
+    } else {
+      // 建立空白行程
+      finalItinerary = buildBlankWizardItinerary(actualDays);
+    }
+
+    // 建立新專案
+    const newProjectId = 'ori-' + Math.random().toString(36).substring(2, 9) + '-' + Math.random().toString(36).substring(2, 9);
+    const projName = `${wizardDestination || '日本'}之旅 - ${wizardDepartureTime || '未定'}`;
+    const formattedLodgings = wizardLodgings
+      .filter(l => l.name.trim() !== '')
+      .map(l => ({
+        id: 'lod-' + Math.random().toString(36).substring(2, 9),
+        name: l.name,
+        checkIn: l.checkIn,
+        checkOut: l.checkOut,
+        mapUrl: l.mapUrl
+      }));
+
+    // 依「去程／回程」標記對應航班；未標記時退回「第一段＝去程、最後一段＝回程」
+    const filledFlights = wizardFlights.filter(f => f.flightNo.trim() !== '');
+    const depSeg = filledFlights.find(f => f.segType === 'outbound') || filledFlights[0];
+    const retSeg = [...filledFlights].reverse().find(f => f.segType === 'return')
+      || (filledFlights.length > 1 ? filledFlights[filledFlights.length - 1] : null);
+
+    // 有航班起飛時間時，將日期組成 datetime-local 格式（YYYY-MM-DDTHH:mm），讓機票時間完整帶入
+    const extractHHmm = (t: any) => {
+      const m = String(t || '').match(/(\d{1,2}:\d{2})/);
+      return m ? m[1].padStart(5, '0') : '';
+    };
+    const depHHmm = extractHHmm(depSeg?.depTime);
+    const retHHmm = extractHHmm(retSeg?.depTime);
+    const finalDepartureTime = wizardDepartureTime && depHHmm ? `${wizardDepartureTime}T${depHHmm}` : wizardDepartureTime;
+    const finalReturnTime = wizardReturnTime && retHHmm ? `${wizardReturnTime}T${retHHmm}` : wizardReturnTime;
+
+    const newProject = {
+      id: newProjectId,
+      name: projName,
+      updatedAt: new Date().toISOString(),
+      destination: wizardDestination,
+      departureTime: finalDepartureTime,
+      returnTime: finalReturnTime,
+      itinerary: finalItinerary,
+      packingList: [],
+      quickNotes: '',
+      lodgings: formattedLodgings,
+      transportPref: 'transit',
+      flightInfo: {
+        depFlightNo: depSeg?.flightNo || '',
+        depFrom: depSeg?.depAirport || '',
+        depTo: depSeg?.arrAirport || '',
+        retFlightNo: retSeg?.flightNo || '',
+        retFrom: retSeg?.depAirport || '',
+        retTo: retSeg?.arrAirport || '',
+        segments: filledFlights
+      },
+      immigrationQr: { base64: '', driveLink: '', driveFileId: '' },
+      customsQr: { base64: '', driveLink: '', driveFileId: '' }
+    };
+
+    const updatedProjects = [...projects, newProject];
+    setProjects(updatedProjects);
+    localStorage.setItem('oritour_projects', JSON.stringify(updatedProjects));
+    
+    // 切換至新專案並關閉精靈
+    switchingToProjectIdRef.current = newProjectId;
+    
+    setDestination(wizardDestination);
+    setDepartureTime(finalDepartureTime);
+    setReturnTime(finalReturnTime);
+    setItinerary(finalItinerary);
+    setPackingList([]);
+    setQuickNotes('');
+    setLodgings(formattedLodgings);
+    setTransportPref('transit');
+    setFlightInfo(newProject.flightInfo);
+    setImmigrationQr({ base64: '', driveLink: '', driveFileId: '' });
+    setCustomsQr({ base64: '', driveLink: '', driveFileId: '' });
+    setShareId(newProjectId);
+    localStorage.setItem('oritour_share_id', newProjectId);
+
+    setActiveProjectId(newProjectId);
+    localStorage.setItem('oritour_active_project_id', newProjectId);
+
+    setIsCloudLoading(false);
+    setIsWizardOpen(false);
+    setView('planner');
+    showToast(`精靈規劃完成！已成功為您開啟「${projName}」規劃汪！`);
+  };
+
+  // --- 規劃精靈機票截圖辨識 ---
+  const handleWizardParseTicketImage = async (file: File) => {
+    const activeKey = wizardApiKey.trim() || apiKey.trim();
+    if (!activeKey) {
+      showToast("辨識需要 Gemini API Key，請先於步驟 1 填入金鑰汪！", "warning");
+      return;
+    }
+
+    setIsCloudLoading(true);
+
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        try {
+          const base64Url = reader.result as string;
+          const mimeType = file.type || 'image/jpeg';
+          const base64Data = base64Url.split(',')[1];
+
+          const systemPrompt = `你是一位專業的機票解析助理。請解析使用者提供的機票資訊（機票截圖圖片），提取其中「所有航段的航班代號」、「起飛機場」、「降落機場」、「起飛時間」與「降落時間」。
+請將所有找到的航段按照時間順序排列。
+回覆格式必須是嚴格合法的 JSON 陣列，每個元素代表一個航段，結構如下：
+[
+  {
+    "flightNo": "航班代號，例如: BR198",
+    "depAirport": "起飛機場代碼，例如: TPE",
+    "arrAirport": "降落機場代碼，例如: NRT",
+    "depTime": "起飛日期時間，格式為 YYYY-MM-DDTHH:mm 或 HH:mm，例如: 2026-07-10T08:50",
+    "arrTime": "降落日期時間，格式為 YYYY-MM-DDTHH:mm 或 HH:mm，例如: 2026-07-10T13:15"
+  }
+]`;
+
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: "請解析此機票截圖中所有的航班段落，以 JSON 陣列回傳。" },
+                  { inline_data: { mime_type: mimeType, data: base64Data } }
+                ]
+              }],
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+
+          if (!response.ok) throw new Error("API 呼叫失敗，請確認 API Key 是否有效！");
+          const resData = await response.json();
+          const rawText = resData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          
+          let cleanText = rawText.trim();
+          if (cleanText.startsWith("```json")) {
+            cleanText = cleanText.substring(7);
+          } else if (cleanText.startsWith("```")) {
+            cleanText = cleanText.substring(3);
+          }
+          if (cleanText.endsWith("```")) {
+            cleanText = cleanText.substring(0, cleanText.length - 3);
+          }
+          cleanText = cleanText.trim();
+
+          const parsed = JSON.parse(cleanText);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setWizardFlights(parsed.map((f, i) => ({
+              flightNo: f.flightNo || '',
+              depAirport: f.depAirport || '',
+              arrAirport: f.arrAirport || '',
+              depTime: f.depTime || '',
+              arrTime: f.arrTime || '',
+              // 依時間順序推定：第一段為去程、最後一段為回程、其餘為中途
+              segType: i === 0 ? 'outbound' : (i === parsed.length - 1 ? 'return' : 'middle')
+            })));
+
+            // 嘗試從第一個航段的起飛時間自動更新出發日期
+            const firstDep = parsed[0]?.depTime || '';
+            if (firstDep.includes('T')) {
+              const depDateStr = firstDep.split('T')[0];
+              setWizardDepartureTime(depDateStr);
+              // 如果最後一個航段有日期，更新回程日期與天數
+              const lastArr = parsed[parsed.length - 1]?.arrTime || '';
+              if (lastArr.includes('T')) {
+                const arrDateStr = lastArr.split('T')[0];
+                setWizardReturnTime(arrDateStr);
+                const diffDays = Math.ceil((new Date(arrDateStr).getTime() - new Date(depDateStr).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                setWizardNumDays(diffDays > 0 ? diffDays : 1);
+              }
+            }
+
+            showToast("機票截圖辨識成功！航班資訊已填入汪！");
+          } else {
+            throw new Error("無法從圖片中提取有效的航班資訊，請換張截圖試試汪！");
+          }
+          setIsCloudLoading(false);
+        } catch (err: any) {
+          console.error(err);
+          showToast(`辨識失敗：${err.message}`, "warning");
+          setIsCloudLoading(false);
+        }
+      };
+    } catch (err: any) {
+      console.error(err);
+      showToast(`載入圖片失敗：${err.message}`, "warning");
+      setIsCloudLoading(false);
+    }
+  };
+
   // --- 初始化 URL 參數檢查 ---
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1297,7 +2227,7 @@ export default function App() {
       const driveId = params.get('driveId');
       
       if (driveId) {
-        loadFromGoogleDrive(driveId);
+        setPendingDriveId(driveId);
       } else if (urlId) {
         if (gasUrl) {
           loadFromCloud(urlId);
@@ -1876,8 +2806,11 @@ export default function App() {
 【旅行背景資訊】
 - 本次旅遊地區：${destination || '未指定（請依住宿地點與抵達機場推斷合理地區）'}
 - Day ${activeDay} 指定活動區域範圍：${dayData.area ? `「${dayData.area}」— 所有景點必須嚴格位於此區域範圍內，不可安排範圍外的景點！` : '未指定（請以住宿地點為中心、單一區域內安排，避免跨區奔波）'}
-- 去程航班：${flightInfo.depFlightNo || '未提供代號'}｜${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}｜起飛 ${departureTime || '未設定'}
-- 回程航班：${flightInfo.retFlightNo || '未提供代號'}｜${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'}｜起飛 ${returnTime || '未設定'}
+- 航班資訊：${flightInfo.segments && flightInfo.segments.length > 0 
+    ? flightInfo.segments.map((seg: any, idx: number) => `段 ${idx + 1}: ${seg.flightNo} (${seg.depAirport} ➔ ${seg.arrAirport})`).join(', ') 
+    : `去程航班 ${flightInfo.depFlightNo || '未提供'} (${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}), 回程航班 ${flightInfo.retFlightNo || '未提供'} (${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'})`
+}
+- 出發日期：${departureTime || '未設定'}，回程日期：${returnTime || '未設定'}
 - 若 Day ${activeDay} 是「出發日」：行程請從抵達機場（${flightInfo.depTo || '抵達機場'}）入境後開始安排，第一站考量航班抵達時間與機場進市區的交通時間。
 - 若 Day ${activeDay} 是「回國日」：行程要提早收尾，最後安排前往回程出發機場（${flightInfo.retFrom || '出發機場'}），國際線請預留起飛前 3 小時抵達機場辦理報到。
 - Day ${activeDay} 的日期：${dayDate ? dayDate.toLocaleDateString('zh-TW') : '未知（未設定出發時間）'}
@@ -2015,11 +2948,14 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
     if (!notifyFlowWarnings([newItinerary[dayIdx]])) showToast(successMsg);
   };
 
-  const deleteSpot = () => {
-    const { dayIdx, spotIdx } = editData;
-    if (spotIdx === -1) return;
+  const deleteSpot = (targetDayIdx?: number, targetSpotIdx?: number) => {
+    const dayIdx = targetDayIdx !== undefined ? targetDayIdx : (editData ? editData.dayIdx : -1);
+    const spotIdx = targetSpotIdx !== undefined ? targetSpotIdx : (editData ? editData.spotIdx : -1);
+    if (dayIdx === -1 || spotIdx === -1) return;
+
     const newItinerary = [...itinerary];
-    newItinerary[dayIdx].spots.splice(spotIdx, 1);
+    const spots = newItinerary[dayIdx].spots.filter((_, idx) => idx !== spotIdx);
+    newItinerary[dayIdx] = { ...newItinerary[dayIdx], spots };
     setItinerary(newItinerary);
     setIsModalOpen(false);
     showToast("景點已被移除汪！", "warning");
@@ -2037,13 +2973,6 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
     newItinerary[dayIdx] = { ...newItinerary[dayIdx], spots };
     setItinerary(newItinerary);
     showToast("已交換行程時間與順序汪！");
-  };
-
-  const handleDeleteSpotDirect = (dayIdx, spotIdx) => {
-    const newItinerary = [...itinerary];
-    newItinerary[dayIdx].spots.splice(spotIdx, 1);
-    setItinerary(newItinerary);
-    showToast("景點已被移除汪！", "warning");
   };
 
   const handleInsertSpot = (sourceDayIdx, spotIdx, targetDayIdx, targetTime) => {
@@ -2332,6 +3261,14 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
           
           <div className="flex flex-wrap items-center gap-2.5">
             <button 
+              onClick={() => setIsProjectsModalOpen(true)}
+              className="p-2 border border-[#EADEC6] bg-[#FAF8F5] rounded-xl text-[#593E30] hover:bg-[#F3EFE9] transition-all flex items-center gap-1 text-xs font-bold"
+              title="我的行程專案庫"
+            >
+              <span>💼</span>
+              <span>我的行程</span>
+            </button>
+            <button 
               onClick={() => setIsSyncModalOpen(true)}
               className="p-2 border border-[#EADEC6] bg-[#FAF8F5] rounded-xl text-[#593E30] hover:bg-[#F3EFE9] transition-all flex items-center gap-1 text-xs font-bold"
               title="雲端備份與分享設定"
@@ -2419,16 +3356,20 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
 
             <div className="flex flex-wrap justify-center lg:justify-start gap-3">
               <button 
-                onClick={() => setView('planner')}
-                className="px-8 py-3.5 bg-[#C75A51] text-white rounded-xl font-bold shadow-md hover:bg-[#B34D44] hover:shadow-lg transition-all transform hover:-translate-y-0.5 text-sm"
+                onClick={() => {
+                  setWizardStep(1);
+                  setIsWizardOpen(true);
+                }}
+                className="px-8 py-3.5 bg-[#C75A51] text-white rounded-xl font-bold shadow-md hover:bg-[#B34D44] hover:shadow-lg transition-all transform hover:-translate-y-0.5 text-sm flex items-center gap-1.5 animate-pulse"
               >
-                直接進入個人工作區
+                <span>🐕</span>
+                <span>啟動小柴規劃精靈</span>
               </button>
               <button 
-                onClick={() => setIsSettingsOpen(true)}
-                className="px-5 py-3.5 bg-white border-2 border-[#EADEC6] text-[#593E30] font-bold rounded-xl hover:bg-[#FAF8F5] transition-all text-sm"
+                onClick={() => setView('planner')}
+                className="px-6 py-3.5 bg-[#593E30] text-white rounded-xl font-bold shadow-md hover:bg-[#463125] transition-all text-sm"
               >
-                串接個人 Gemini API
+                直接進入個人工作區
               </button>
             </div>
 
@@ -2875,50 +3816,135 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                   <div className="space-y-1.5 pt-2 border-t border-dashed border-[#EADEC6]">
                     <label className="text-[10px] text-[#8C7D73] font-bold block">🎫 航班代號與起降機場（貼機票可自動填入）：</label>
                     <div className="grid grid-cols-3 gap-1.5">
-                      <input
-                        type="text"
-                        value={flightInfo.depFlightNo}
-                        onChange={e => setFlightInfo({ ...flightInfo, depFlightNo: e.target.value.toUpperCase() })}
-                        placeholder="去程 BR198"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none font-bold text-[#593E30]"
-                      />
-                      <input
-                        type="text"
-                        value={flightInfo.depFrom}
-                        onChange={e => setFlightInfo({ ...flightInfo, depFrom: e.target.value })}
-                        placeholder="起飛 TPE"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
-                      />
-                      <input
-                        type="text"
-                        value={flightInfo.depTo}
-                        onChange={e => setFlightInfo({ ...flightInfo, depTo: e.target.value })}
-                        placeholder="降落 NRT"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
-                      />
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <input
-                        type="text"
-                        value={flightInfo.retFlightNo}
-                        onChange={e => setFlightInfo({ ...flightInfo, retFlightNo: e.target.value.toUpperCase() })}
-                        placeholder="回程 BR197"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none font-bold text-[#593E30]"
-                      />
-                      <input
-                        type="text"
-                        value={flightInfo.retFrom}
-                        onChange={e => setFlightInfo({ ...flightInfo, retFrom: e.target.value })}
-                        placeholder="起飛 NRT"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
-                      />
-                      <input
-                        type="text"
-                        value={flightInfo.retTo}
-                        onChange={e => setFlightInfo({ ...flightInfo, retTo: e.target.value })}
-                        placeholder="降落 TPE"
-                        className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
-                      />
+                    {flightInfo.segments && flightInfo.segments.length > 0 ? (
+                      <div className="space-y-2">
+                        {flightInfo.segments.map((seg: any, idx: number) => (
+                          <div key={idx} className="space-y-1 bg-[#FAF8F5]/50 border border-[#EADEC6]/40 p-2 rounded-lg relative">
+                            <div className="flex justify-between items-center text-[9px] text-[#8C7D73] font-bold">
+                              <span>航段 {idx + 1}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updatedSegs = flightInfo.segments.filter((_: any, i: number) => i !== idx);
+                                  const depFlightNo = updatedSegs[0]?.flightNo || '';
+                                  const depFrom = updatedSegs[0]?.depAirport || '';
+                                  const depTo = updatedSegs[0]?.arrAirport || '';
+                                  const retFlightNo = updatedSegs[updatedSegs.length - 1]?.flightNo || '';
+                                  const retFrom = updatedSegs[updatedSegs.length - 1]?.depAirport || '';
+                                  const retTo = updatedSegs[updatedSegs.length - 1]?.arrAirport || '';
+                                  setFlightInfo({
+                                    ...flightInfo,
+                                    depFlightNo, depFrom, depTo,
+                                    retFlightNo, retFrom, retTo,
+                                    segments: updatedSegs
+                                  });
+                                }}
+                                className="text-red-500 hover:text-red-700 font-black"
+                              >
+                                移除
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1">
+                              <input
+                                type="text"
+                                value={seg.flightNo || ''}
+                                onChange={e => {
+                                  const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
+                                    i === idx ? { ...s, flightNo: e.target.value.toUpperCase() } : s
+                                  );
+                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                }}
+                                placeholder="航班號"
+                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none text-[#593E30] font-bold"
+                              />
+                              <input
+                                type="text"
+                                value={seg.depAirport || ''}
+                                onChange={e => {
+                                  const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
+                                    i === idx ? { ...s, depAirport: e.target.value } : s
+                                  );
+                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                }}
+                                placeholder="起飛港"
+                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none"
+                              />
+                              <input
+                                type="text"
+                                value={seg.arrAirport || ''}
+                                onChange={e => {
+                                  const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
+                                    i === idx ? { ...s, arrAirport: e.target.value } : s
+                                  );
+                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                }}
+                                placeholder="降落港"
+                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updatedSegs = [...(flightInfo.segments || []), { flightNo: '', depAirport: '', arrAirport: '', depTime: '', arrTime: '' }];
+                            setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                          }}
+                          className="w-full py-1 border border-dashed border-[#593E30] text-[#593E30] hover:bg-[#FDFCFB] rounded-lg text-[9px] font-bold transition-all"
+                        >
+                          ➕ 新增航段
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <input
+                            type="text"
+                            value={flightInfo.depFlightNo}
+                            onChange={e => setFlightInfo({ ...flightInfo, depFlightNo: e.target.value.toUpperCase() })}
+                            placeholder="去程 BR198"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none font-bold text-[#593E30]"
+                          />
+                          <input
+                            type="text"
+                            value={flightInfo.depFrom}
+                            onChange={e => setFlightInfo({ ...flightInfo, depFrom: e.target.value })}
+                            placeholder="起飛 TPE"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            value={flightInfo.depTo}
+                            onChange={e => setFlightInfo({ ...flightInfo, depTo: e.target.value })}
+                            placeholder="降落 NRT"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                          <input
+                            type="text"
+                            value={flightInfo.retFlightNo}
+                            onChange={e => setFlightInfo({ ...flightInfo, retFlightNo: e.target.value.toUpperCase() })}
+                            placeholder="回程 BR197"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none font-bold text-[#593E30]"
+                          />
+                          <input
+                            type="text"
+                            value={flightInfo.retFrom}
+                            onChange={e => setFlightInfo({ ...flightInfo, retFrom: e.target.value })}
+                            placeholder="起飛 NRT"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            value={flightInfo.retTo}
+                            onChange={e => setFlightInfo({ ...flightInfo, retTo: e.target.value })}
+                            placeholder="降落 TPE"
+                            className="text-[10px] px-2 py-1.5 bg-[#FAF8F5] border border-[#EADEC6] rounded-lg focus:outline-none"
+                          />
+                        </div>
+                      </>
+                    )}
                     </div>
 
                     {/* 航班動態查詢 */}
@@ -3862,7 +4888,7 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
             <button
               onClick={() => {
                 if (window.confirm(`確定要刪除「${spotContextMenu.spot.name}」嗎汪？`)) {
-                  handleDeleteSpotDirect(spotContextMenu.dayIdx, spotContextMenu.spotIdx);
+                  deleteSpot(spotContextMenu.dayIdx, spotContextMenu.spotIdx);
                 }
                 setSpotContextMenu(null);
               }}
@@ -4160,9 +5186,9 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
 
               <div className="flex gap-2 pt-3 border-t border-[#EADEC6]">
                 {editData.spotIdx !== -1 && (
-                  <button 
-                    type="button" 
-                    onClick={deleteSpot}
+                  <button
+                    type="button"
+                    onClick={() => deleteSpot()}
                     className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl transition-all flex items-center gap-1.5"
                   >
                     <Trash2 size={14} /> 刪除
@@ -4494,6 +5520,61 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
       )}
 
       {/* ==========================================
+          偵測到分享行程 (Google Drive) 授權載入 Modal
+          ========================================== */}
+      {pendingDriveId && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs animate-in fade-in">
+          <div className="washi-card w-full max-w-md p-6 shadow-2xl relative transition-all animate-in zoom-in-95">
+            <button 
+              onClick={() => setPendingDriveId(null)} 
+              className="absolute top-4 right-4 text-[#8C7D73] hover:text-[#C75A51] p-1.5 rounded-lg hover:bg-[#F3EFE9]"
+            >
+              <X size={16} />
+            </button>
+
+            <h3 className="text-base font-black text-[#593E30] border-b-2 border-[#EADEC6] pb-3 mb-4 flex items-center gap-1.5">
+              <span>📂</span> 偵測到分享行程
+            </h3>
+
+            <div className="space-y-4 text-xs text-[#8C7D73] leading-relaxed">
+              <p>
+                小柴偵測到您開啟了他人分享的 Google Drive 行程連結！
+              </p>
+              <p>
+                為配合瀏覽器的安全保護機制（避免彈出式視窗被攔截），請點擊下方按鈕以啟動 Google 安全授權，並下載該行程表汪！
+              </p>
+              
+              <div className="bg-[#FBF8F3] border border-[#EADEC6] rounded-xl p-3 text-[11px]">
+                <span className="font-bold text-[#593E30] block mb-1">💡 瀏覽器安全提示：</span>
+                由於瀏覽器設有彈出式視窗封鎖保護，授權視窗必須由您親自點擊才能正常開啟，自動載入會被瀏覽器攔截。
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingDriveId(null)}
+                  className="flex-1 py-2.5 border border-[#EADEC6] rounded-xl text-xs font-bold text-[#593E30] hover:bg-[#FAF8F5] transition-all"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = pendingDriveId;
+                    setPendingDriveId(null);
+                    loadFromGoogleDrive(id);
+                  }}
+                  className="flex-1 py-2.5 hanko-btn bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                >
+                  🔓 授權並載入行程
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================
           雲端同步與分享 Modal
           ========================================== */}
       {isSyncModalOpen && (
@@ -4741,22 +5822,36 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
 
           <table className="w-full text-[11px] border-collapse mb-4">
             <tbody>
-              <tr className="border-b border-[#DCCFB4]">
-                <td className="py-1.5 font-black w-24">✈️ 出發</td>
-                <td>
-                  {departureTime ? new Date(departureTime).toLocaleString('zh-TW') : '未設定'}
-                  {flightInfo.depFlightNo && `　${flightInfo.depFlightNo}`}
-                  {(flightInfo.depFrom || flightInfo.depTo) && `　${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}`}
-                </td>
-              </tr>
-              <tr className="border-b border-[#DCCFB4]">
-                <td className="py-1.5 font-black">🛬 回國</td>
-                <td>
-                  {returnTime ? new Date(returnTime).toLocaleString('zh-TW') : '未設定'}
-                  {flightInfo.retFlightNo && `　${flightInfo.retFlightNo}`}
-                  {(flightInfo.retFrom || flightInfo.retTo) && `　${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'}`}
-                </td>
-              </tr>
+              {flightInfo.segments && flightInfo.segments.length > 0 ? (
+                flightInfo.segments.map((seg: any, idx: number) => (
+                  <tr key={idx} className="border-b border-[#DCCFB4]">
+                    <td className="py-1.5 font-black w-24">✈️ 航段 {idx + 1}</td>
+                    <td>
+                      {seg.flightNo || '未提供'}｜{seg.depAirport || '?'} ➔ {seg.arrAirport || '?'}
+                      {seg.depTime && `｜${seg.depTime}`}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <>
+                  <tr className="border-b border-[#DCCFB4]">
+                    <td className="py-1.5 font-black w-24">✈️ 出發</td>
+                    <td>
+                      {departureTime ? new Date(departureTime).toLocaleString('zh-TW') : '未設定'}
+                      {flightInfo.depFlightNo && `　${flightInfo.depFlightNo}`}
+                      {(flightInfo.depFrom || flightInfo.depTo) && `　${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}`}
+                    </td>
+                  </tr>
+                  <tr className="border-b border-[#DCCFB4]">
+                    <td className="py-1.5 font-black">🛬 回國</td>
+                    <td>
+                      {returnTime ? new Date(returnTime).toLocaleString('zh-TW') : '未設定'}
+                      {flightInfo.retFlightNo && `　${flightInfo.retFlightNo}`}
+                      {(flightInfo.retFrom || flightInfo.retTo) && `　${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'}`}
+                    </td>
+                  </tr>
+                </>
+              )}
               <tr className="border-b border-[#DCCFB4]">
                 <td className="py-1.5 font-black">🗾 旅遊地區</td>
                 <td>{destination || '未指定'}</td>
@@ -4899,6 +5994,923 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
         </div>
         <p className="text-[10px] font-medium text-[#B3A99A]">© 2026 OriTour Studio. 本系統資料會即時同步暫存於您的個人瀏覽器中，離線亦可使用。</p>
       </footer>
+
+      {/* ==========================================
+          Onboarding 引導教學 Modal
+          ========================================== */}
+      {isOnboardingOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="washi-card w-full max-w-lg p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95 text-[#2C2421]">
+            <button 
+              onClick={finishOnboarding} 
+              className="absolute top-4 right-4 text-[#8C7D73] hover:text-[#C75A51] p-1.5 rounded-lg hover:bg-[#F3EFE9]"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="text-center mb-6">
+              <span className="text-4xl block mb-2 animate-bounce">
+                {onboardingStep === 1 && "🌸"}
+                {onboardingStep === 2 && "🤖"}
+                {onboardingStep === 3 && "📅"}
+                {onboardingStep === 4 && "💼"}
+                {onboardingStep === 5 && "💾"}
+              </span>
+              <h3 className="text-base font-black text-[#593E30] flex items-center justify-center gap-1.5">
+                {onboardingStep === 1 && "歡迎來到 OriTour 和風規劃師！"}
+                {onboardingStep === 2 && "小柴 AI 導遊助理"}
+                {onboardingStep === 3 && "隨心所欲的 Timeline 控制"}
+                {onboardingStep === 4 && "專案管理（多行程支援）"}
+                {onboardingStep === 5 && "離線 QR Code 與 Google 備份"}
+              </h3>
+              <p className="text-[10px] text-[#8C7D73] mt-1">教學步驟 {onboardingStep} / 5</p>
+            </div>
+
+            {/* 教學內容 */}
+            <div className="min-h-[140px] text-xs leading-relaxed text-[#6D5D55] bg-[#FAF8F5] border border-[#EADEC6] rounded-xl p-4 mb-6">
+              {onboardingStep === 1 && (
+                <div className="space-y-2">
+                  <p className="font-bold text-[#593E30]">🎌 最懂日本自由行的和風規劃師 🎌</p>
+                  <p>OriTour 是專為熱愛日本旅行的您所設計的工具。我們結合了精緻的和風視覺設計，並在背後提供強大的 AI 助手與離線通關支持，讓您的旅程準備變得無比輕鬆！</p>
+                  <p className="text-[10px] text-[#8C7D73] bg-white border border-[#EADEC6]/60 p-2 rounded-lg italic">💡 小提醒：點選下方「下一步」可以快速熟悉各功能，助您順利規劃！</p>
+                </div>
+              )}
+
+              {onboardingStep === 2 && (
+                <div className="space-y-2">
+                  <p className="font-bold text-[#593E30]">🐕 小柴 AI 導遊隨侍在側</p>
+                  <p>左側的 AI 聊天視窗是您最強的規劃後盾：</p>
+                  <ul className="list-disc list-inside space-y-1 font-semibold text-[#8C7D73]">
+                    <li>直接對話：「幫我把第二天的銀座改成秋葉原」、「下午加個拉麵店」</li>
+                    <li>直接貼上機票或車票文字，AI 將會自動分析並匯入行程</li>
+                  </ul>
+                </div>
+              )}
+
+              {onboardingStep === 3 && (
+                <div className="space-y-2">
+                  <p className="font-bold text-[#593E30]">📅 行程 Timeline 與自由排序</p>
+                  <p>右側的 Timeline 能讓您清晰掌控每日景點。我們設計了：</p>
+                  <ul className="list-disc list-inside space-y-1 font-semibold text-[#8C7D73]">
+                    <li><strong>景點編輯 ✏️</strong>：點擊鉛筆即可修改時間、花費與地圖連結</li>
+                    <li><strong>手風琴折疊 🔄</strong>：點擊「與同天景點交換」展開清單，一鍵交換順序，對手機操作非常友善！</li>
+                  </ul>
+                </div>
+              )}
+
+              {onboardingStep === 4 && (
+                <div className="space-y-2">
+                  <p className="font-bold text-[#593E30]">💼 多行程專案管理（新功能！）</p>
+                  <p>現在您可以同時規劃多個旅程了！</p>
+                  <ul className="list-disc list-inside space-y-1 font-semibold text-[#8C7D73]">
+                    <li>導覽列點選「<strong>我的行程</strong>」開啟行程庫</li>
+                    <li>自由建立多個計畫（如「東京賞櫻」、「關西賞楓」）並隨時切換</li>
+                    <li>支援整包行程匯出為 `.json` 備份檔，隨時匯入</li>
+                  </ul>
+                </div>
+              )}
+
+              {onboardingStep === 5 && (
+                <div className="space-y-2">
+                  <p className="font-bold text-[#593E30]">✈️ Visit Japan Web 離線 QR Code 與 GDrive 同步</p>
+                  <p>為了日本機場出關的順暢：</p>
+                  <ul className="list-disc list-inside space-y-1 font-semibold text-[#8C7D73]">
+                    <li>上傳入境/海關 QR 碼，系統會壓縮快取，**在機場沒有網路時依然能點開順利通關**</li>
+                    <li>整合 Google Drive 備份分頁，點擊一鍵備份，系統將生成專屬的旅伴分享連結！</li>
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* 控制按鈕 */}
+            <div className="flex items-center justify-between border-t border-[#EADEC6] pt-4">
+              <button
+                onClick={finishOnboarding}
+                className="text-xs text-[#8C7D73] hover:text-[#C75A51] font-bold"
+              >
+                跳過教學
+              </button>
+              
+              <div className="flex gap-2">
+                {onboardingStep > 1 && (
+                  <button
+                    onClick={() => setOnboardingStep(prev => prev - 1)}
+                    className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                  >
+                    上一步
+                  </button>
+                )}
+                {onboardingStep < 5 ? (
+                  <button
+                    onClick={() => setOnboardingStep(prev => prev + 1)}
+                    className="px-5 py-2 bg-[#593E30] text-white rounded-xl text-xs font-bold hover:bg-[#463125] transition-all"
+                  >
+                    下一步
+                  </button>
+                ) : (
+                  <button
+                    onClick={finishOnboarding}
+                    className="px-5 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all"
+                  >
+                    開始體驗汪！
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================
+          小柴規劃精靈 Modal
+          ========================================== */}
+      {isWizardOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="washi-card w-full max-w-lg p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95 text-[#2C2421]">
+            <button 
+              onClick={() => setIsWizardOpen(false)} 
+              className="absolute top-4 right-4 text-[#8C7D73] hover:text-[#C75A51] p-1.5 rounded-lg hover:bg-[#F3EFE9]"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="text-center mb-6">
+              <span className="text-4xl block mb-2 animate-bounce">🐕</span>
+              <h3 className="text-base font-black text-[#593E30] flex items-center justify-center gap-1.5">
+                小柴規劃精靈
+              </h3>
+              <p className="text-[10px] text-[#8C7D73] mt-0.5">步驟 {wizardStep} / 5</p>
+            </div>
+
+            {/* 步驟 1：Gemini API Key */}
+            {wizardStep === 1 && (
+              <div className="space-y-4">
+                <div className="bg-[#FAF2EB] border border-[#ECD9C9] rounded-xl p-3.5 space-y-2">
+                  <span className="font-black text-xs text-[#C75A51] block">🔑 什麼是 Gemini API Key？</span>
+                  <p className="text-[11px] leading-relaxed text-[#6D5D55]">
+                    小柴規劃精靈使用 Google Gemini AI 來為您量身打造行程。填寫金鑰即可啟用自動規劃功能！
+                  </p>
+                  <div className="text-[10px] text-[#8C7D73] space-y-1 bg-white border border-[#EADEC6]/50 p-2.5 rounded-lg font-semibold">
+                    <p className="font-bold text-[#593E30]">申請三步驟：</p>
+                    <p>1. 點選此處連至 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-[#C75A51] underline font-bold">Google AI Studio</a></p>
+                    <p>2. 登入 Google 帳號後，點擊「Create API Key」按鈕創立免費金鑰</p>
+                    <p>3. 複製金鑰並貼在下方輸入框！</p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-[#593E30]">您的 Gemini API Key：</label>
+                  <input
+                    type="password"
+                    value={wizardApiKey}
+                    onChange={e => setWizardApiKey(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                  />
+                </div>
+
+                <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardUseAi(false);
+                      setWizardStep(2);
+                    }}
+                    className="text-xs text-[#8C7D73] hover:text-[#C75A51] font-bold"
+                  >
+                    直接進入手動規劃 (不設定 API Key)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardUseAi(true);
+                      setWizardStep(2);
+                    }}
+                    className="px-5 py-2 bg-[#593E30] hover:bg-[#463125] text-white rounded-xl text-xs font-bold transition-all"
+                  >
+                    下一步
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步驟 2：目的地與日期 */}
+            {wizardStep === 2 && (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-[#593E30]">🗾 目的地城市 / 地區：</label>
+                  <input
+                    type="text"
+                    value={wizardDestination}
+                    onChange={e => setWizardDestination(e.target.value)}
+                    placeholder="例如：東京、京都、北海道..."
+                    className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-[#593E30]">🛫 預計出發日：</label>
+                    <input
+                      type="date"
+                      value={wizardDepartureTime}
+                      onChange={e => handleWizardDepartureChange(e.target.value)}
+                      className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-[#593E30]">🛬 預計回程日：</label>
+                    <input
+                      type="date"
+                      value={wizardReturnTime}
+                      onChange={e => handleWizardReturnChange(e.target.value)}
+                      className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-[#593E30]">📅 規劃旅行日數：</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={wizardNumDays}
+                    onChange={e => handleWizardDaysChange(Number(e.target.value))}
+                    className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                  />
+                </div>
+
+                <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(1)}
+                    className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                  >
+                    上一步
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!wizardDestination || !wizardDepartureTime}
+                    className="px-5 py-2 bg-[#593E30] hover:bg-[#463125] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50"
+                    onClick={() => setWizardStep(3)}
+                  >
+                    下一步
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步驟 3：航班資訊 */}
+            {wizardStep === 3 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="font-black text-xs text-[#593E30] block">🎫 航班資訊（選填，允許多段航程）</span>
+                  {(wizardApiKey.trim() || apiKey.trim()) && (
+                    <label className="cursor-pointer px-2.5 py-1.5 bg-[#3B6C57] hover:bg-[#2D5343] text-white text-[9px] font-bold rounded-lg transition-all flex items-center gap-1 shadow-xs">
+                      <span>📸</span>
+                      <span>上傳機票截圖辨識</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) handleWizardParseTicketImage(file);
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+                
+                <div className="max-h-[220px] overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+                  {wizardFlights.map((flight, idx) => (
+                    <div key={idx} className="bg-[#FAF8F5] border border-[#EADEC6] rounded-xl p-3.5 relative space-y-2">
+                      <div className="flex justify-between items-center text-[10px] text-[#8C7D73] font-bold">
+                        <div className="flex items-center gap-2">
+                          <span>航段 {idx + 1}</span>
+                          <div className="flex items-center gap-1">
+                            {[
+                              { key: 'outbound', label: '🛫 去程' },
+                              { key: 'middle', label: '🔁 中途' },
+                              { key: 'return', label: '🛬 回程' }
+                            ].map(t => (
+                              <button
+                                key={t.key}
+                                type="button"
+                                onClick={() => setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, segType: t.key } : f))}
+                                className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${flight.segType === t.key ? 'bg-[#593E30] text-white border-[#593E30]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#F3EFE9]'}`}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {wizardFlights.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setWizardFlights(wizardFlights.filter((_, i) => i !== idx))}
+                            className="text-red-500 hover:text-red-700 font-bold"
+                          >
+                            移除此段
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">航班代號</label>
+                          <input
+                            type="text"
+                            value={flight.flightNo}
+                            onChange={e => {
+                              const val = e.target.value.toUpperCase();
+                              setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, flightNo: val } : f));
+                            }}
+                            placeholder="例如: BR198"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">起飛機場</label>
+                          <input
+                            type="text"
+                            value={flight.depAirport}
+                            onChange={e => setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, depAirport: e.target.value } : f))}
+                            placeholder="例如: TPE"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">降落機場</label>
+                          <input
+                            type="text"
+                            value={flight.arrAirport}
+                            onChange={e => setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, arrAirport: e.target.value } : f))}
+                            placeholder="例如: NRT"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">起飛時間</label>
+                          <input
+                            type="text"
+                            value={flight.depTime}
+                            onChange={e => setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, depTime: e.target.value } : f))}
+                            placeholder="例如: 08:50"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">降落時間</label>
+                          <input
+                            type="text"
+                            value={flight.arrTime}
+                            onChange={e => setWizardFlights(wizardFlights.map((f, i) => i === idx ? { ...f, arrTime: e.target.value } : f))}
+                            placeholder="例如: 13:15"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setWizardFlights([...wizardFlights, { flightNo: '', depAirport: '', arrAirport: '', depTime: '', arrTime: '', segType: wizardFlights.some(f => f.segType === 'return') ? 'middle' : 'return' }])}
+                  className="w-full py-2 border border-dashed border-[#593E30] text-[#593E30] hover:bg-[#FAF8F5] rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1"
+                >
+                  ➕ 新增下一航段
+                </button>
+
+                <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(2)}
+                    className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                  >
+                    上一步
+                  </button>
+                  <button
+                    type="button"
+                    className="px-5 py-2 bg-[#593E30] hover:bg-[#463125] text-white rounded-xl text-xs font-bold transition-all"
+                    onClick={() => setWizardStep(4)}
+                  >
+                    下一步
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步驟 4：飯店住宿 */}
+            {wizardStep === 4 && (
+              <div className="space-y-4">
+                <span className="font-black text-xs text-[#593E30] block">🏨 住宿飯店（選填，允許多間飯店）</span>
+                
+                <div className="max-h-[220px] overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+                  {wizardLodgings.map((lodging, idx) => (
+                    <div key={idx} className="bg-[#FAF8F5] border border-[#EADEC6] rounded-xl p-3.5 relative space-y-2">
+                      <div className="flex justify-between items-center text-[10px] text-[#8C7D73] font-bold">
+                        <span>住宿 {idx + 1}</span>
+                        {wizardLodgings.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setWizardLodgings(wizardLodgings.filter((_, i) => i !== idx))}
+                            className="text-red-500 hover:text-red-700 font-bold"
+                          >
+                            移除此飯店
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1 space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">飯店名稱</label>
+                          <input
+                            type="text"
+                            value={lodging.name}
+                            onChange={e => setWizardLodgings(wizardLodgings.map((l, i) => i === idx ? { ...l, name: e.target.value } : l))}
+                            placeholder="例如: 日暮里 APA 飯店"
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!lodging.name}
+                          onClick={() => {
+                            window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lodging.name)}`, '_blank');
+                          }}
+                          className="px-3 py-2 bg-[#FAF8F5] border border-[#EADEC6] hover:bg-[#F3EFE9] text-[#593E30] rounded-lg text-xs font-bold transition-all whitespace-nowrap disabled:opacity-40"
+                        >
+                          🔍 搜尋地圖
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">入住日期</label>
+                          <input
+                            type="date"
+                            value={lodging.checkIn}
+                            onChange={e => setWizardLodgings(wizardLodgings.map((l, i) => i === idx ? { ...l, checkIn: e.target.value } : l))}
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-[#8C7D73]">退房日期</label>
+                          <input
+                            type="date"
+                            value={lodging.checkOut}
+                            onChange={e => setWizardLodgings(wizardLodgings.map((l, i) => i === idx ? { ...l, checkOut: e.target.value } : l))}
+                            className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-[#8C7D73]">Google 地圖網址 (查詢後複製貼回)</label>
+                        <input
+                          type="text"
+                          value={lodging.mapUrl}
+                          onChange={e => setWizardLodgings(wizardLodgings.map((l, i) => i === idx ? { ...l, mapUrl: e.target.value } : l))}
+                          placeholder="https://maps.app.goo.gl/..."
+                          className="w-full bg-white border border-[#EADEC6] rounded px-2 py-1.5 text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setWizardLodgings([...wizardLodgings, { name: '', checkIn: '', checkOut: '', mapUrl: '' }])}
+                  className="w-full py-2 border border-dashed border-[#593E30] text-[#593E30] hover:bg-[#FAF8F5] rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1"
+                >
+                  ➕ 新增另一間飯店
+                </button>
+
+                <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(3)}
+                    className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                  >
+                    上一步
+                  </button>
+                  <button
+                    type="button"
+                    className="px-5 py-2 bg-[#593E30] hover:bg-[#463125] text-white rounded-xl text-xs font-bold transition-all"
+                    onClick={() => setWizardStep(5)}
+                  >
+                    下一步
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步驟 5：小柴 AI 智慧預排 */}
+            {wizardStep === 5 && (
+              <div className="space-y-4">
+                {!(wizardApiKey.trim() || apiKey.trim()) ? (
+                  <div className="space-y-4">
+                    <div className="bg-[#FAF2EB] border border-[#ECD9C9] rounded-xl p-4 text-center space-y-2">
+                      <span className="text-3xl block animate-pulse">💡</span>
+                      <p className="text-xs font-black text-[#593E30]">即將建立空白日本行程專案！</p>
+                      <p className="text-[11px] leading-relaxed text-[#8C7D73]">
+                        由於未設定 API Key，系統將為您建立包含日期、飯店和航班資訊的【空白行程】。
+                        點選下方按鈕即可直接開啟規劃面板開始手動撰寫！
+                      </p>
+                    </div>
+                    
+                    <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                      <button
+                        type="button"
+                        onClick={() => setWizardStep(4)}
+                        className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                      >
+                        上一步
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleWizardSubmit()}
+                        className="px-6 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                      >
+                        <span>✨</span> 完成精靈，直接建立空白專案
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between bg-[#FAF8F5] border border-[#EADEC6] p-3 rounded-xl">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-black text-[#593E30] block">🐕 小柴 AI 智慧預排</span>
+                        <span className="text-[10px] text-[#8C7D73] font-semibold">使用 Gemini API 幫我規劃景點大綱與時間軸</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={wizardUseAi} 
+                          onChange={e => setWizardUseAi(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[#FAF8F5] border-2 border-[#EADEC6] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-[#8C7D73] peer-checked:after:bg-white after:border-[#EADEC6] after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-[#3B6C57] peer-checked:border-[#3B6C57]"></div>
+                      </label>
+                    </div>
+
+                    {wizardUseAi && (
+                      <div className="space-y-3 p-3 bg-[#FAF8F5] border border-[#EADEC6] rounded-xl animate-in fade-in slide-in-from-top-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-[#8C7D73]">大致想去哪些景點、特定區域或吃什麼？</label>
+                          <textarea
+                            rows={2}
+                            value={wizardAiPrompt}
+                            onChange={e => setWizardAiPrompt(e.target.value)}
+                            placeholder="例如: 想要看東京鐵塔、淺草雷門，吃敘敘苑燒肉，逛秋葉原動漫店..."
+                            className="w-full bg-white border border-[#EADEC6] rounded-lg px-2.5 py-1.5 text-[11px] focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-[#8C7D73] block">✈️ 行程風格節奏：</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { key: '行軍', desc: '不浪費時間' },
+                              { key: '平衡', desc: '有鬆有緊' },
+                              { key: '悠閒', desc: '慢活步調' }
+                            ].map(style => (
+                              <button
+                                key={style.key}
+                                type="button"
+                                onClick={() => setWizardAiStyle(style.key as any)}
+                                className={`py-1.5 text-xs font-bold rounded-lg border transition-all ${wizardAiStyle === style.key ? 'bg-[#593E30] text-white border-[#593E30]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#FAF8F5]'}`}
+                              >
+                                {style.key} <span className="text-[8px] font-normal block">{style.desc}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-[#8C7D73] block">🎨 偏好特色主題 (複選)：</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              { label: '🛒 少排購物', value: '少排購物' },
+                              { label: '🌲 親近大自然', value: '親近大自然' },
+                              { label: '⛩️ 古蹟巡禮', value: '名勝古蹟巡禮' },
+                              { label: '🍣 美食之旅', value: '美食之旅' }
+                            ].map(theme => {
+                              const isSelected = wizardAiThemes.includes(theme.value);
+                              return (
+                                <button
+                                  key={theme.value}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setWizardAiThemes(wizardAiThemes.filter(t => t !== theme.value));
+                                    } else {
+                                      setWizardAiThemes([...wizardAiThemes, theme.value]);
+                                    }
+                                  }}
+                                  className={`py-1.5 px-2 text-[10px] font-bold rounded-lg border text-left flex justify-between items-center transition-all ${isSelected ? 'bg-[#3B6C57] text-white border-[#3B6C57]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#FAF8F5]'}`}
+                                >
+                                  <span>{theme.label}</span>
+                                  <span>{isSelected ? '✓' : ''}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {wizardError && (
+                      <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2 animate-in fade-in">
+                        <p className="text-[11px] font-bold text-red-700 leading-relaxed">😿 {wizardError}</p>
+                        <button
+                          type="button"
+                          onClick={() => handleWizardSubmit(true)}
+                          className="text-[10px] text-[#8C7D73] hover:text-[#C75A51] font-bold underline"
+                        >
+                          不想再等 AI？改為直接建立空白行程專案
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-4 border-t border-[#EADEC6]">
+                      <button
+                        type="button"
+                        onClick={() => setWizardStep(4)}
+                        className="px-4 py-2 border border-[#EADEC6] text-[#593E30] bg-white rounded-xl text-xs font-bold hover:bg-[#FAF8F5] transition-all"
+                      >
+                        上一步
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleWizardSubmit()}
+                        className="px-6 py-2 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                      >
+                        <span>✨</span>
+                        <span>{wizardError ? '再試一次，小柴 AI 重新規劃！' : (wizardUseAi ? '完成精靈，小柴 AI 發動規劃！' : '完成精靈，直接建立空白專案')}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================
+          我的行程專案庫 Modal
+          ========================================== */}
+      {isProjectsModalOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="washi-card w-full max-w-lg p-6 shadow-2xl relative transition-all animate-in fade-in zoom-in-95 text-[#2C2421]">
+            <button 
+              onClick={() => {
+                setIsProjectsModalOpen(false);
+                setIsCreatingProject(false);
+              }} 
+              className="absolute top-4 right-4 text-[#8C7D73] hover:text-[#C75A51] p-1.5 rounded-lg hover:bg-[#F3EFE9]"
+            >
+              <X size={16} />
+            </button>
+
+            <h3 className="text-base font-black text-[#593E30] border-b-2 border-[#EADEC6] pb-3 mb-4 flex items-center gap-1.5">
+              <span>💼</span> 我的行程專案庫
+            </h3>
+
+            {/* 新建專案表單區 */}
+            {isCreatingProject ? (
+              <div className="bg-[#FAF8F5] border border-[#EADEC6] rounded-xl p-4 mb-4 space-y-3">
+                <span className="font-black text-xs text-[#593E30] block">➕ 建立新日本行程</span>
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-[#8C7D73]">行程名稱</label>
+                  <input
+                    type="text"
+                    value={newProjectName}
+                    onChange={e => setNewProjectName(e.target.value)}
+                    placeholder="例如：東京賞櫻五天四夜"
+                    className="w-full bg-white border border-[#EADEC6] rounded-lg px-3 py-2 text-xs focus:outline-none text-[#2C2421]"
+                  />
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    <span className="text-[9px] text-[#8C7D73] font-black self-center mr-1">💡 快速名稱：</span>
+                    {[
+                      { name: '東京五天四夜', preset: 'tokyo' },
+                      { name: '京都和風慢活', preset: 'kyoto' },
+                      { name: '京阪神深度遊', preset: 'kyoto' },
+                      { name: '日本自由行', preset: 'blank' }
+                    ].map((item, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setNewProjectName(item.name);
+                          setNewProjectPreset(item.preset as any);
+                        }}
+                        className="px-2 py-0.5 bg-white border border-[#EADEC6] hover:bg-[#FAF8F5] text-[#593E30] text-[9px] font-bold rounded-full transition-all"
+                      >
+                        {item.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-[#8C7D73]">起步範本</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewProjectPreset('tokyo')}
+                      className={`py-1.5 text-xs font-bold rounded-lg border transition-all ${newProjectPreset === 'tokyo' ? 'bg-[#593E30] text-white border-[#593E30]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#FAF8F5]'}`}
+                    >
+                      🗼 東京範本
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewProjectPreset('kyoto')}
+                      className={`py-1.5 text-xs font-bold rounded-lg border transition-all ${newProjectPreset === 'kyoto' ? 'bg-[#593E30] text-white border-[#593E30]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#FAF8F5]'}`}
+                    >
+                      ⛩️ 京都範本
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewProjectPreset('blank')}
+                      className={`py-1.5 text-xs font-bold rounded-lg border transition-all ${newProjectPreset === 'blank' ? 'bg-[#593E30] text-white border-[#593E30]' : 'bg-white border-[#EADEC6] text-[#8C7D73] hover:bg-[#FAF8F5]'}`}
+                    >
+                      📄 空白行程
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-2 justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingProject(false)}
+                    className="px-4 py-1.5 border border-[#EADEC6] text-[#8C7D73] bg-white rounded-lg text-[10px] font-bold hover:bg-[#FAF8F5] transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      createProject(newProjectName, newProjectPreset);
+                      setIsCreatingProject(false);
+                      setNewProjectName('');
+                    }}
+                    className="px-4 py-1.5 bg-[#C75A51] hover:bg-[#B34D44] text-white rounded-lg text-[10px] font-bold transition-all"
+                  >
+                    確認建立
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-between items-center mb-4">
+                <button
+                  type="button"
+                  onClick={() => setIsCreatingProject(true)}
+                  className="px-3 py-1.5 bg-[#3B6C57] hover:bg-[#2D5343] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                >
+                  <span>➕ 建立新專案</span>
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={saveLibraryToGoogleDrive}
+                    disabled={isCloudLoading}
+                    className="px-3 py-1.5 bg-white border border-[#EADEC6] text-[#593E30] hover:bg-[#FAF8F5] rounded-xl text-xs font-bold transition-all flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <span>☁️ 備份至 Drive</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={loadLibraryFromGoogleDrive}
+                    disabled={isCloudLoading}
+                    className="px-3 py-1.5 bg-white border border-[#EADEC6] text-[#593E30] hover:bg-[#FAF8F5] rounded-xl text-xs font-bold transition-all flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <span>🔄 從 Drive 還原</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 專案清單 */}
+            <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+              {projects.map((proj) => {
+                const isActive = proj.id === activeProjectId;
+                return (
+                  <div 
+                    key={proj.id} 
+                    className={`p-3.5 border rounded-xl flex items-center justify-between transition-all ${isActive ? 'bg-[#FAF2EB] border-[#ECD9C9] ring-2 ring-[#C75A51]/20' : 'bg-[#FAF8F5] border-[#EADEC6] hover:bg-[#F3EFE9]'}`}
+                  >
+                    <div className="space-y-1 flex-1 pr-4">
+                      <div className="flex items-center gap-2">
+                        {editingProjectId === proj.id ? (
+                          <input
+                            type="text"
+                            value={editingProjectName}
+                            onChange={e => setEditingProjectName(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                renameProject(proj.id, editingProjectName);
+                                setEditingProjectId(null);
+                              }
+                            }}
+                            autoFocus
+                            className="bg-white border border-[#EADEC6] rounded px-2 py-0.5 text-xs text-[#2C2421] focus:outline-none font-bold"
+                          />
+                        ) : (
+                          <span className="font-black text-xs text-[#593E30]">{proj.name}</span>
+                        )}
+                        {isActive && (
+                          <span className="text-[8px] bg-[#C75A51] text-white px-1.5 py-0.5 rounded font-black">使用中</span>
+                        )}
+                      </div>
+                      <div className="text-[9px] text-[#8C7D73] font-semibold space-x-2">
+                        <span>目的地: {proj.destination || '未填'}</span>
+                        {proj.departureTime && (
+                          <span>🕒 {proj.departureTime} 起飛</span>
+                        )}
+                        <span>• 更新時間: {new Date(proj.updatedAt).toLocaleString('zh-TW', { hour12: false }).substring(5, 16)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-1.5">
+                      {!isActive && editingProjectId !== proj.id && (
+                        <button
+                          type="button"
+                          onClick={() => switchProject(proj.id)}
+                          className="px-2.5 py-1 bg-[#593E30] hover:bg-[#463125] text-white rounded-lg text-[10px] font-bold transition-all"
+                        >
+                          切換
+                        </button>
+                      )}
+                      {editingProjectId === proj.id ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            renameProject(proj.id, editingProjectName);
+                            setEditingProjectId(null);
+                          }}
+                          className="px-2.5 py-1 bg-[#3B6C57] hover:bg-[#2D5343] text-white rounded-lg text-[10px] font-bold transition-all"
+                        >
+                          儲存
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingProjectId(proj.id);
+                            setEditingProjectName(proj.name);
+                          }}
+                          className="px-2 py-1 bg-white border border-[#EADEC6] text-[#593E30] hover:bg-[#FAF8F5] rounded-lg text-[10px] font-bold transition-all"
+                        >
+                          ✏️ 命名
+                        </button>
+                      )}
+                      {editingProjectId !== proj.id && (
+                        <button
+                          type="button"
+                          onClick={() => deleteProject(proj.id)}
+                          className="px-2 py-1 bg-white border border-[#EADEC6] text-[#C75A51] hover:bg-red-50 rounded-lg text-[10px] font-bold transition-all"
+                        >
+                          🗑️
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-end pt-4 mt-4 border-t border-[#EADEC6]">
+              <button 
+                onClick={() => {
+                  setIsProjectsModalOpen(false);
+                  setIsCreatingProject(false);
+                }}
+                className="px-5 py-2 bg-[#593E30] text-white rounded-xl text-xs font-bold hover:bg-[#463125] transition-all"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCloudLoading && (
+        <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center backdrop-blur-xs animate-in fade-in">
+          <div className="washi-card p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4 text-center max-w-xs border-2 border-[#EADEC6]">
+            <span className="text-4xl animate-spin">🌀</span>
+            <p className="text-xs font-black text-[#593E30] mt-2">小柴規劃精靈火速規劃中...</p>
+            <p className="text-[10px] text-[#8C7D73] leading-relaxed">正在串接 Google API 及 AI 引擎，為您量身打造最佳的日本行程動線與時間軸，請稍微耐心等候汪！</p>
+          </div>
+        </div>
+      )}
 
     </div>
   );
