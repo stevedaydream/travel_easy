@@ -1146,16 +1146,21 @@ export default function App() {
       setIsSettingsOpen(true);
       return;
     }
-    if (!flightInfo.depFlightNo && !flightInfo.retFlightNo) {
+    const hasFlightNo = (flightInfo.segments && flightInfo.segments.some((s: any) => s.flightNo)) || flightInfo.depFlightNo || flightInfo.retFlightNo;
+    if (!hasFlightNo) {
       showToast("請先填入航班代號汪！", "warning");
       return;
     }
 
     setIsGuideLoading(true);
     try {
+      const flightDesc = flightInfo.segments && flightInfo.segments.length > 0
+        ? flightInfo.segments.map((seg: any, idx: number) => `航段 ${idx + 1}：${seg.flightNo || '未提供'}｜${seg.depAirport || '?'} ➔ ${seg.arrAirport || '?'}`).join('\n')
+        : `去程：${flightInfo.depFlightNo || '未提供'}｜${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}｜起飛時間 ${departureTime || '未提供'}
+回程：${flightInfo.retFlightNo || '未提供'}｜${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'}｜起飛時間 ${returnTime || '未提供'}`;
+
       const prompt = `以下是旅客的航班資訊：
-去程：${flightInfo.depFlightNo || '未提供'}｜${flightInfo.depFrom || '?'} ➔ ${flightInfo.depTo || '?'}｜起飛時間 ${departureTime || '未提供'}
-回程：${flightInfo.retFlightNo || '未提供'}｜${flightInfo.retFrom || '?'} ➔ ${flightInfo.retTo || '?'}｜起飛時間 ${returnTime || '未提供'}
+${flightDesc}
 
 請以繁體中文、條列式，針對「去程」與「回程」分別提供：
 1. 該航班所屬航空公司在出發機場的航廈與報到櫃台區域（依公開常識）
@@ -2586,48 +2591,58 @@ ${lodgingLines}
           
           const accessToken = tokenResponse.access_token;
           
-          // 建立檔案 Metadata
-          const metadata = {
-            name: `OriTour_VJW_${type === 'immigration' ? '入境審查' : '海關申報'}_QR.jpg`,
-            mimeType: file.type,
-          };
-          
-          const form = new FormData();
-          form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-          form.append('file', file);
-          
-          const uploadResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-            },
-            body: form
-          });
-          
-          if (!uploadResponse.ok) {
-            const errJson = await uploadResponse.json();
-            throw new Error(errJson.error?.message || "上傳至雲端失敗");
-          }
-          
-          const fileData = await uploadResponse.json();
-          
-          // 讀取圖片 base64 做離線快取
-          const reader = new FileReader();
-          reader.onload = () => {
-            const qrData = {
-              base64: String(reader.result),
-              driveLink: fileData.webViewLink,
-              driveFileId: fileData.id
+          try {
+            // 在授權後（非直接使用者手勢限制的 Callback 中）異步執行圖片壓縮
+            const { base64, blob } = await compressImage(file);
+            const compressedFile = new File([blob], file.name, { type: file.type });
+
+            // 建立檔案 Metadata
+            const metadata = {
+              name: `OriTour_VJW_${type === 'immigration' ? '入境審查' : '海關申報'}_QR.jpg`,
+              mimeType: compressedFile.type,
             };
-            if (type === 'immigration') {
-              setImmigrationQr(qrData);
-            } else {
-              setCustomsQr(qrData);
+            
+            const form = new FormData();
+            form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+            form.append('file', compressedFile);
+            
+            const uploadResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+              },
+              body: form
+            });
+            
+            if (!uploadResponse.ok) {
+              const errJson = await uploadResponse.json();
+              throw new Error(errJson.error?.message || "上傳至雲端失敗");
             }
-            showToast("成功上傳 QR Code 到您的 Google Drive 汪！");
+            
+            const fileData = await uploadResponse.json();
+            
+            // 讀取圖片 base64 做離線快取
+            const reader = new FileReader();
+            reader.onload = () => {
+              const qrData = {
+                base64: String(reader.result),
+                driveLink: fileData.webViewLink,
+                driveFileId: fileData.id
+              };
+              if (type === 'immigration') {
+                setImmigrationQr(qrData);
+              } else {
+                setCustomsQr(qrData);
+              }
+              showToast("成功上傳 QR Code 到您的 Google Drive 汪！");
+              setIsUploadLoading(false);
+            };
+            reader.readAsDataURL(compressedFile);
+          } catch (err: any) {
+            console.error(err);
+            showToast(`上傳失敗汪：${err.message}`, "warning");
             setIsUploadLoading(false);
-          };
-          reader.readAsDataURL(file);
+          }
         },
       });
       
@@ -3474,13 +3489,44 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                   <span className="text-[10px] font-black text-[#8C7D73]">STEP 1 • 機票時間</span>
                   <span className="text-xs">{departureTime && returnTime ? '✅' : '⬜'}</span>
                 </div>
-                <p className="text-[11px] font-bold text-[#593E30] leading-relaxed">
-                  ✈️ 出發：{departureTime ? new Date(departureTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : <span className="text-[#C75A51]">尚未設定</span>}
-                  {flightInfo.depFlightNo && <span className="text-[#8C7D73]"> {flightInfo.depFlightNo}</span>}
-                  <br />
-                  🛬 回國：{returnTime ? new Date(returnTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : <span className="text-[#C75A51]">尚未設定</span>}
-                  {flightInfo.retFlightNo && <span className="text-[#8C7D73]"> {flightInfo.retFlightNo}</span>}
-                </p>
+                <div className="text-[11px] font-bold text-[#593E30] leading-relaxed space-y-1">
+                  <div>
+                    <span>✈️ 出發：</span>
+                    {departureTime ? (
+                      <span className="text-[#593E30]">
+                        {new Date(departureTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    ) : (
+                      <span className="text-[#C75A51]">尚未設定</span>
+                    )}
+                    {flightInfo.segments && flightInfo.segments.length > 0 ? (
+                      <div className="text-[#8C7D73] text-[9px] mt-1 ml-4 bg-[#FAF8F5] px-1.5 py-0.5 rounded border border-[#EADEC6]/40 block w-fit font-mono">
+                        {flightInfo.segments.map((seg: any) => `${seg.flightNo || '?'}(${seg.depAirport || '?'}-${seg.arrAirport || '?'})`).join(' ➔ ')}
+                      </div>
+                    ) : (
+                      flightInfo.depFlightNo && (
+                        <span className="text-[#8C7D73] text-[9px] bg-[#FAF8F5] px-1.5 py-0.5 rounded border border-[#EADEC6]/40 ml-1 inline-block font-mono">
+                          {flightInfo.depFlightNo} ({flightInfo.depFrom || '?'}➔{flightInfo.depTo || '?'})
+                        </span>
+                      )
+                    )}
+                  </div>
+                  <div>
+                    <span>🛬 回國：</span>
+                    {returnTime ? (
+                      <span className="text-[#593E30]">
+                        {new Date(returnTime).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    ) : (
+                      <span className="text-[#C75A51]">尚未設定</span>
+                    )}
+                    {(!flightInfo.segments || flightInfo.segments.length === 0) && flightInfo.retFlightNo && (
+                      <span className="text-[#8C7D73] text-[9px] bg-[#FAF8F5] px-1.5 py-0.5 rounded border border-[#EADEC6]/40 ml-1 inline-block font-mono">
+                        {flightInfo.retFlightNo} ({flightInfo.retFrom || '?'}➔{flightInfo.retTo || '?'})
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
               <div
                 onClick={() => jumpToRef(lodgingPanelRef)}
@@ -3815,12 +3861,12 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                   {/* 航班代號與起降機場 */}
                   <div className="space-y-1.5 pt-2 border-t border-dashed border-[#EADEC6]">
                     <label className="text-[10px] text-[#8C7D73] font-bold block">🎫 航班代號與起降機場（貼機票可自動填入）：</label>
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className="w-full">
                     {flightInfo.segments && flightInfo.segments.length > 0 ? (
-                      <div className="space-y-2">
+                      <div className="space-y-2 w-full">
                         {flightInfo.segments.map((seg: any, idx: number) => (
-                          <div key={idx} className="space-y-1 bg-[#FAF8F5]/50 border border-[#EADEC6]/40 p-2 rounded-lg relative">
-                            <div className="flex justify-between items-center text-[9px] text-[#8C7D73] font-bold">
+                          <div key={idx} className="space-y-1 bg-[#FAF8F5]/50 border border-[#EADEC6]/40 p-2 rounded-lg relative w-full">
+                            <div className="flex justify-between items-center text-[9px] text-[#8C7D73] font-bold mb-1">
                               <span>航段 {idx + 1}</span>
                               <button
                                 type="button"
@@ -3844,7 +3890,7 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                 移除
                               </button>
                             </div>
-                            <div className="grid grid-cols-3 gap-1">
+                            <div className="grid grid-cols-3 gap-2">
                               <input
                                 type="text"
                                 value={seg.flightNo || ''}
@@ -3852,10 +3898,17 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                   const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
                                     i === idx ? { ...s, flightNo: e.target.value.toUpperCase() } : s
                                   );
-                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                  const depFlightNo = updatedSegs[0]?.flightNo || '';
+                                  const retFlightNo = updatedSegs[updatedSegs.length - 1]?.flightNo || '';
+                                  setFlightInfo({
+                                    ...flightInfo,
+                                    depFlightNo,
+                                    retFlightNo,
+                                    segments: updatedSegs
+                                  });
                                 }}
                                 placeholder="航班號"
-                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none text-[#593E30] font-bold"
+                                className="text-[10px] px-2 py-1.5 bg-white border border-[#EADEC6] rounded-lg focus:outline-none text-[#593E30] font-bold w-full"
                               />
                               <input
                                 type="text"
@@ -3864,10 +3917,17 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                   const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
                                     i === idx ? { ...s, depAirport: e.target.value } : s
                                   );
-                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                  const depFrom = updatedSegs[0]?.depAirport || '';
+                                  const retFrom = updatedSegs[updatedSegs.length - 1]?.depAirport || '';
+                                  setFlightInfo({
+                                    ...flightInfo,
+                                    depFrom,
+                                    retFrom,
+                                    segments: updatedSegs
+                                  });
                                 }}
                                 placeholder="起飛港"
-                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none"
+                                className="text-[10px] px-2 py-1.5 bg-white border border-[#EADEC6] rounded-lg focus:outline-none w-full"
                               />
                               <input
                                 type="text"
@@ -3876,10 +3936,17 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                   const updatedSegs = flightInfo.segments.map((s: any, i: number) => 
                                     i === idx ? { ...s, arrAirport: e.target.value } : s
                                   );
-                                  setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                                  const depTo = updatedSegs[0]?.arrAirport || '';
+                                  const retTo = updatedSegs[updatedSegs.length - 1]?.arrAirport || '';
+                                  setFlightInfo({
+                                    ...flightInfo,
+                                    depTo,
+                                    retTo,
+                                    segments: updatedSegs
+                                  });
                                 }}
                                 placeholder="降落港"
-                                className="text-[9px] px-1.5 py-1 bg-white border border-[#EADEC6] rounded-md focus:outline-none"
+                                className="text-[10px] px-2 py-1.5 bg-white border border-[#EADEC6] rounded-lg focus:outline-none w-full"
                               />
                             </div>
                           </div>
@@ -3888,9 +3955,20 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                           type="button"
                           onClick={() => {
                             const updatedSegs = [...(flightInfo.segments || []), { flightNo: '', depAirport: '', arrAirport: '', depTime: '', arrTime: '' }];
-                            setFlightInfo({ ...flightInfo, segments: updatedSegs });
+                            const depFlightNo = updatedSegs[0]?.flightNo || '';
+                            const depFrom = updatedSegs[0]?.depAirport || '';
+                            const depTo = updatedSegs[0]?.arrAirport || '';
+                            const retFlightNo = updatedSegs[updatedSegs.length - 1]?.flightNo || '';
+                            const retFrom = updatedSegs[updatedSegs.length - 1]?.depAirport || '';
+                            const retTo = updatedSegs[updatedSegs.length - 1]?.arrAirport || '';
+                            setFlightInfo({
+                              ...flightInfo,
+                              depFlightNo, depFrom, depTo,
+                              retFlightNo, retFrom, retTo,
+                              segments: updatedSegs
+                            });
                           }}
-                          className="w-full py-1 border border-dashed border-[#593E30] text-[#593E30] hover:bg-[#FDFCFB] rounded-lg text-[9px] font-bold transition-all"
+                          className="w-full py-2 border border-dashed border-[#593E30] text-[#593E30] hover:bg-[#FDFCFB] rounded-lg text-[10px] font-bold transition-all"
                         >
                           ➕ 新增航段
                         </button>
@@ -3948,27 +4026,43 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                     </div>
 
                     {/* 航班動態查詢 */}
-                    {(flightInfo.depFlightNo || flightInfo.retFlightNo) && (
+                    {((flightInfo.segments && flightInfo.segments.length > 0) || flightInfo.depFlightNo || flightInfo.retFlightNo) && (
                       <div className="flex flex-wrap gap-1.5">
-                        {flightInfo.depFlightNo && (
-                          <a
-                            href={getFlightStatusUrl(flightInfo.depFlightNo)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-all"
-                          >
-                            🔍 {flightInfo.depFlightNo} 即時動態
-                          </a>
-                        )}
-                        {flightInfo.retFlightNo && (
-                          <a
-                            href={getFlightStatusUrl(flightInfo.retFlightNo)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-all"
-                          >
-                            🔍 {flightInfo.retFlightNo} 即時動態
-                          </a>
+                        {flightInfo.segments && flightInfo.segments.length > 0 ? (
+                          flightInfo.segments.filter((seg: any) => seg.flightNo).map((seg: any, idx: number) => (
+                            <a
+                              key={idx}
+                              href={getFlightStatusUrl(seg.flightNo)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-all"
+                            >
+                              🔍 {seg.flightNo} 即時動態
+                            </a>
+                          ))
+                        ) : (
+                          <>
+                            {flightInfo.depFlightNo && (
+                              <a
+                                href={getFlightStatusUrl(flightInfo.depFlightNo)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-all"
+                              >
+                                🔍 {flightInfo.depFlightNo} 即時動態
+                              </a>
+                            )}
+                            {flightInfo.retFlightNo && (
+                              <a
+                                href={getFlightStatusUrl(flightInfo.retFlightNo)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-all"
+                              >
+                                🔍 {flightInfo.retFlightNo} 即時動態
+                              </a>
+                            )}
+                          </>
                         )}
                       </div>
                     )}
@@ -4326,14 +4420,14 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   try {
-                                    const { base64, blob } = await compressImage(file);
                                     if (isGdriveConfigured) {
-                                      uploadToGoogleDrive(new File([blob], file.name, { type: file.type }), 'immigration');
+                                      uploadToGoogleDrive(file, 'immigration');
                                     } else {
+                                      const { base64 } = await compressImage(file);
                                       setImmigrationQr({ base64, driveLink: '', driveFileId: '' });
                                       showToast("成功儲存入境審查 QR Code 至本機（未啟用 Google Drive）汪！");
                                     }
-                                  } catch (err) {
+                                  } catch (err: any) {
                                     showToast("上傳失敗：" + err.message, "warning");
                                   }
                                 }
@@ -4378,14 +4472,14 @@ ${prevDays.length > 0 ? JSON.stringify(prevDays) : '（這是第一天，無先�
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   try {
-                                    const { base64, blob } = await compressImage(file);
                                     if (isGdriveConfigured) {
-                                      uploadToGoogleDrive(new File([blob], file.name, { type: file.type }), 'customs');
+                                      uploadToGoogleDrive(file, 'customs');
                                     } else {
+                                      const { base64 } = await compressImage(file);
                                       setCustomsQr({ base64, driveLink: '', driveFileId: '' });
                                       showToast("成功儲存海關申報 QR Code 至本機（未啟用 Google Drive）汪！");
                                     }
-                                  } catch (err) {
+                                  } catch (err: any) {
                                     showToast("上傳失敗：" + err.message, "warning");
                                   }
                                 }
